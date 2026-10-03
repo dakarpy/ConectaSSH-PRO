@@ -972,7 +972,9 @@ def tls_listener_add():
     cfg = request("GET", "/api/server/config")
     listen = ask("TLS listener (IP:port)", "0.0.0.0:443")
     cert, key = select_certificate()
-    cfg.setdefault("tls_forwarders", []).append({"listen": listen, "cert_file": cert, "key_file": key})
+    listeners = cfg.get("tls_forwarders") or []
+    listeners.append({"listen": listen, "cert_file": cert, "key_file": key})
+    cfg["tls_forwarders"] = listeners
     save_settings("/api/server/config", cfg)
 
 
