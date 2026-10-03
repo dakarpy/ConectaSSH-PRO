@@ -74,13 +74,13 @@ def colorize_menu(lines):
 
         # Encabezado VPS: estructura/etiquetas cyan; datos normales blancos;
         # solamente un estado positivo como ACTIVO queda verde.
-        if any(label in raw for label in ("Host:", "SO:", "Uptime:", "Hora:", "CPU:", "Memoria:", "UP/DOWN:", "SERVICIO:")):
+        if any(label in raw for label in ("Host:", "SO:", "Uptime:", "Hora:", "CPU:", "RAM:", "Memoria:", "UP/DOWN:", "SERVICIO:")):
             def header_entry(match):
                 bullet, label, value = match.groups()
                 state_color = GREEN if label == "SERVICIO" and value.strip().upper() in ("ACTIVO", "ONLINE", "OK") else WHITE
                 return paint(bullet, CYAN) + paint(label + ":", CYAN, True) + " " + paint(value, state_color)
             colored = re.sub(
-                r"(•\s*)(Host|SO|Uptime|Hora|CPU|Memoria|UP/DOWN|SERVICIO):\s*([^│]+?)(?=\s{2,}•|\s*│|$)",
+                r"(•\s*)(Host|SO|Uptime|Hora|CPU|RAM|Memoria|UP/DOWN|SERVICIO):\s*([^│]+?)(?=\s{2,}•|\s*│|$)",
                 header_entry,
                 raw,
             )
@@ -354,6 +354,10 @@ def collect_vps_status():
         else:
             xray = value if isinstance(value, dict) else None
 
+    try:
+        load_avg = float(Path("/proc/loadavg").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        load_avg = None
     total_mem, used_mem = local_meminfo()
     if stats and stats.get("mem_total_bytes"):
         total_mem = stats["mem_total_bytes"]
@@ -371,7 +375,7 @@ def collect_vps_status():
     return {
         "host": os.uname().nodename, "os": os_name, "uptime": uptime,
         "time": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"),
-        "cores": os.cpu_count() or 1, "cpu": (stats or {}).get("cpu_percent"),
+        "cores": os.cpu_count() or 1, "cpu": (stats or {}).get("cpu_percent"), "load": load_avg,
         "mem_total": total_mem, "mem_used": used_mem,
         "disk_pct": disk_pct,
         "ssh_total": len(users) if users is not None else None,
@@ -1532,6 +1536,15 @@ def render_menu(title, options, vps_status=None, columns=None, two_columns=False
     def single(value=""):
         return "│ " + clip(value, inner).ljust(inner) + " │"
 
+    def metrics_row(left="", right=""):
+        # Alinear el segundo bloque exactamente con SO, Hora y Servicio.
+        gap = 3
+        left_width = (inner - gap) // 2
+        right_width = inner - gap - left_width
+        left_text = clip(left, left_width).ljust(left_width)
+        right_text = clip(right, right_width).ljust(right_width)
+        return "│ " + left_text + " " * gap + right_text + " │"
+
     def summary_row(left="", middle="", right=""):
         # Resumen compacto de usuarios, separado del encabezado antes del menú.
         gap = 3
@@ -1557,21 +1570,27 @@ def render_menu(title, options, vps_status=None, columns=None, two_columns=False
     lines = [top]
     if vps_status is not None:
         cpu = "--" if vps_status.get("cpu") is None else f"{vps_status['cpu']:.1f}%"
-        ram = (f"{size(vps_status['mem_used'])} / {size(vps_status['mem_total'])}"
-               if vps_status.get("mem_total") else "--")
+        if vps_status.get("mem_total"):
+            mem_used_mb = int(vps_status["mem_used"] / 1024**2)
+            mem_total_gb = vps_status["mem_total"] / 1024**3
+            mem_pct = (100 * vps_status["mem_used"] / vps_status["mem_total"])
+            ram = f"{mem_used_mb}MB / {mem_total_gb:.0f}GB - {mem_pct:.0f}%"
+        else:
+            ram = "--"
         online = vps_status.get("ssh_online")
         expired = vps_status.get("ssh_expired")
         total = vps_status.get("ssh_total")
         service_label = {"active": "activo", "inactive": "inactivo", "failed": "fallido",
                          "activating": "activando", "deactivating": "desactivando"}.get(
                              vps_status.get("service"), vps_status.get("service", "--"))
+        load = "--" if vps_status.get("load") is None else f"{vps_status['load']:.2f}"
         lines.extend([
             row(f"• Host: {vps_status.get('host', '--')}",
                 f"• SO: {vps_status.get('os', '--')}"),
             row(f"• Uptime: {vps_status.get('uptime', '--')}",
                 f"• Hora: {vps_status.get('time', '--')}"),
-            row(f"• CPU: {cpu} ({vps_status.get('cores', '--')} cores)",
-                f"• Memoria: {ram}"),
+            metrics_row(f"• CPU: {vps_status.get('cores', '--')} ({cpu}) LOAD: {load}",
+                         f"• RAM: {ram}"),
             row("• UP/DOWN: " + size(vps_status.get("rx_bytes", 0)) +
                 " | " + size(vps_status.get("tx_bytes", 0)),
                 "• SERVICIO: " + service_label.upper()),
