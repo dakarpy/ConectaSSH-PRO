@@ -34,7 +34,7 @@ import (
 // *HCRConfig in the main config disables it entirely.
 const (
 	defaultHCRDownloadPollTimeout = 20 * time.Second
-	defaultHCRMaxDownloadFrame    = 774
+	defaultHCRMaxDownloadFrame    = 3290
 )
 
 type HCRConfig struct {
