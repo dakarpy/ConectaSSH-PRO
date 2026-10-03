@@ -3583,26 +3583,26 @@ func main() {
 		u.mu.Unlock()
 
 		// BR-style date: dd/MM/yyyy
-		expStr := "Sem limite"
+		expStr := "Sin límite"
 		if exp != nil {
 			expStr = exp.Local().Format("02/01/2006")
 		}
 		sb.WriteString("\n<br>-----------------<br>\n")
-		sb.WriteString("Account Information")
+		sb.WriteString("Información de la Cuenta")
 		sb.WriteString("\n<br>-----------------<br>\n")
-		sb.WriteString("Username: ")
+		sb.WriteString("Usuario: ")
 		sb.WriteString(name)
 		sb.WriteString("\n<br>-----------------<br>\n")
 
-		sb.WriteString("Expiration: ")
+		sb.WriteString("Vencimiento: ")
 		sb.WriteString(expStr)
 		sb.WriteString("\n<br>-----------------<br>\n")
 
-		sb.WriteString("Max Upload: ")
+		sb.WriteString("Máximo Upload: ")
 		sb.WriteString(strconv.Itoa(up))
 		sb.WriteString(" Mbps")
 		sb.WriteString("\n<br>-----------------<br>\n")
-		sb.WriteString("Max Download: ")
+		sb.WriteString("Máximo Download: ")
 		sb.WriteString(strconv.Itoa(down))
 		sb.WriteString(" Mbps")
 		sb.WriteString("\n<br>-----------------<br>\n")
