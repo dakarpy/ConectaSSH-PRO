@@ -264,6 +264,23 @@ def number(label, default, minimum=0, maximum=1000000):
     return value
 
 
+def normalize_public_endpoint(value):
+    """Accept a port and store it as 0.0.0.0:PORT; preserve IP:PORT input."""
+    raw = str(value).strip()
+    if raw.isdecimal():
+        port = int(raw)
+        if not 1 <= port <= 65535:
+            raise CLIError("El puerto debe estar entre 1 y 65535")
+        return f"0.0.0.0:{port}"
+    return raw
+
+
+def normalize_public_endpoints(value):
+    if isinstance(value, list):
+        return [normalize_public_endpoint(item) for item in value]
+    return normalize_public_endpoint(value)
+
+
 def expiry(default=""):
     raw = ask("Vencimiento (AAAA-MM-DD, días desde hoy o 'nunca')", default or "nunca")
     if raw.lower() in ("never", "none", "nunca", "0"):
@@ -781,6 +798,10 @@ def edit_field(path, field, parent_keys=()):
     if current is None:
         current = False if kind == "bool" else ([] if kind in ("list", "intlist") else (0 if kind == "int" else ""))
     value = setting_value(label, current, kind)
+    if key in ("listen", "udp_listen", "tcp_listen", "fake_dns_listen") and key != "local_ssh_listen":
+        value = normalize_public_endpoints(value)
+    if key == "extra_listen":
+        value = normalize_public_endpoints(value)
     if value == current:
         print("No changes.")
         return
@@ -904,6 +925,8 @@ def block_field(block, field):
     if old is None:
         old = False if kind == "bool" else ([] if kind == "list" else (0 if kind == "int" else ""))
     value = setting_value(label, old, kind)
+    if key in ("listen", "udp_listen", "tcp_listen", "fake_dns_listen"):
+        value = normalize_public_endpoints(value)
     if value == old:
         print("No changes.")
         return
@@ -970,7 +993,7 @@ def select_certificate():
 
 def tls_listener_add():
     cfg = request("GET", "/api/server/config")
-    listen = ask("TLS listener (IP:port)", "0.0.0.0:443")
+    listen = normalize_public_endpoint(ask("Puerto TLS", "443"))
     cert, key = select_certificate()
     listeners = cfg.get("tls_forwarders") or []
     listeners.append({"listen": listen, "cert_file": cert, "key_file": key})
@@ -1003,7 +1026,9 @@ def tls_listener_field(index, field):
     elif field == "certificate":
         listeners[index]["cert_file"], listeners[index]["key_file"] = select_certificate()
     else:
-        listeners[index]["listen"] = ask("TLS listener (IP:port)", listeners[index]["listen"])
+        listeners[index]["listen"] = normalize_public_endpoint(
+            ask("Puerto TLS", str(listeners[index]["listen"]).rsplit(":", 1)[-1])
+        )
     cfg["tls_forwarders"] = listeners
     save_settings("/api/server/config", cfg)
 
@@ -1306,11 +1331,13 @@ def set_banner():
 
 def set_ssh_ports():
     cfg = request("GET", "/api/server/config")
-    cfg["listen"] = ask("Dirección SSH principal (IP:puerto)", cfg.get("listen") or "0.0.0.0:80")
-    current = ", ".join(cfg.get("extra_listen") or [])
-    extras = input(f"Direcciones adicionales, separadas por coma [{current}] (ingresá - para borrar): ").strip()
+    cfg["listen"] = normalize_public_endpoint(
+        ask("Puerto SSH principal", str(cfg.get("listen") or "0.0.0.0:80").rsplit(":", 1)[-1])
+    )
+    current = ", ".join(str(item).rsplit(":", 1)[-1] for item in (cfg.get("extra_listen") or []))
+    extras = input(f"Puertos adicionales, separados por coma [{current}] (ingresá - para borrar): ").strip()
     extras = "" if extras == "-" else (extras or current)
-    cfg["extra_listen"] = [part.strip() for part in extras.split(",") if part.strip()]
+    cfg["extra_listen"] = normalize_public_endpoints([part.strip() for part in extras.split(",") if part.strip()])
     result = request("POST", "/api/server/config", cfg)
     print("Configuración de escuchas SSH aplicada.")
     if result:

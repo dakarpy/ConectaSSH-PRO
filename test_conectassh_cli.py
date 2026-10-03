@@ -232,6 +232,36 @@ class TokenManagementTest(unittest.TestCase):
         self.assertEqual(request.call_args.args[:2], ("POST", "/api/xray/clients/update"))
         self.assertEqual(request.call_args.args[2]["uuid"], "client-uuid")
 
+    def test_public_ports_accept_port_only_and_normalize_to_all_interfaces(self):
+        self.assertEqual(cli.normalize_public_endpoint("8080"), "0.0.0.0:8080")
+        self.assertEqual(cli.normalize_public_endpoint("65535"), "0.0.0.0:65535")
+        self.assertEqual(cli.normalize_public_endpoint("0.0.0.0:443"), "0.0.0.0:443")
+        self.assertEqual(
+            cli.normalize_public_endpoints(["8080", "0.0.0.0:8443"]),
+            ["0.0.0.0:8080", "0.0.0.0:8443"],
+        )
+        with self.assertRaises(cli.CLIError):
+            cli.normalize_public_endpoint("65536")
+
+    def test_tls_listener_add_accepts_port_only(self):
+        cfg = {"tls_forwarders": []}
+        with patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), None]) as request, \
+                patch.object(cli, "ask", return_value="8443"), \
+                patch.object(cli, "select_certificate", return_value=("/cert.pem", "/key.pem")), \
+                redirect_stdout(io.StringIO()):
+            cli.tls_listener_add()
+        self.assertEqual(request.call_args.args[2]["tls_forwarders"][0]["listen"], "0.0.0.0:8443")
+
+    def test_ssh_ports_accept_port_only_for_main_and_secondary(self):
+        cfg = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"], "users": []}
+        with patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), None]) as request, \
+                patch("builtins.input", side_effect=["443", "8081, 8082"]), \
+                redirect_stdout(io.StringIO()):
+            cli.set_ssh_ports()
+        payload = request.call_args.args[2]
+        self.assertEqual(payload["listen"], "0.0.0.0:443")
+        self.assertEqual(payload["extra_listen"], ["0.0.0.0:8081", "0.0.0.0:8082"])
+
     def test_git_update_uses_installed_updater_without_prompt(self):
         updater = Path(self.temp.name) / "update.sh"
         updater.write_text("#!/bin/bash\n")
