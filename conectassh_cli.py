@@ -30,6 +30,56 @@ INSTALL_DIR = Path(os.environ.get("DRAGONCORE_DIR", "/opt/sshpanel"))
 ENV_FILE = INSTALL_DIR / ".env"
 SERVICE = os.environ.get("DRAGONCORE_SERVICE", "sshpanel")
 
+# Colores ANSI para terminales SSH/Android. Se desactivan con NO_COLOR.
+RESET = "\033[0m"
+BOLD = "\033[1m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+WHITE = "\033[37m"
+MAGENTA = "\033[35m"
+
+
+def paint(text, color, bold=False):
+    if os.environ.get("NO_COLOR") or not sys.stdout.isatty():
+        return str(text)
+    return f"{BOLD if bold else ""}{color}{text}{RESET}"
+
+
+def colorize_menu(lines):
+    """Aplica el esquema visual sin alterar el ancho calculado del menú."""
+    out = []
+    for line in lines:
+        raw = line
+        if raw.startswith(("┌", "└", "├", "┏", "┗", "┣")) or "┤" in raw or "┓" in raw or "┛" in raw:
+            out.append(paint(raw, CYAN))
+            continue
+        if "SCRIPT CONECTA SSH -" in raw:
+            out.append(paint(raw, WHITE, True))
+            continue
+        if "[00] • SALIR" in raw:
+            out.append(paint(raw, RED, True))
+            continue
+        if "Elegí una opción" in raw:
+            out.append(paint(raw, CYAN))
+            continue
+        if "[01]" in raw or "[02]" in raw or "[03]" in raw or "[04]" in raw or "[05]" in raw or "[06]" in raw or "[07]" in raw or "[08]" in raw or "[09]" in raw or "[10]" in raw or "[11]" in raw or "[12]" in raw or "[13]" in raw or "[14]" in raw or "[15]" in raw or "[16]" in raw or "[17]" in raw or "[18]" in raw or "[19]" in raw or "[20]" in raw or "[21]" in raw or "[22]" in raw or "[23]" in raw or "[24]" in raw or "[25]" in raw:
+            # Números y etiquetas: cian + amarillo, manteniendo el layout original.
+            import re
+            colored = re.sub(r"(\[\d{2}\])", lambda m: paint(m.group(1), CYAN, True), raw)
+            colored = re.sub(r"(•\s*)([^│]+)", lambda m: m.group(1) + paint(m.group(2), YELLOW), colored)
+            out.append(colored)
+            continue
+        if "Onlines:" in raw or "Expirados:" in raw or "Total:" in raw:
+            out.append(paint(raw, WHITE, True))
+            continue
+        if "SERVICIO:" in raw:
+            out.append(paint(raw, GREEN if "ACTIVO" in raw.upper() else RED, True))
+            continue
+        out.append(raw)
+    return out
+
 
 class CLIError(Exception):
     pass
@@ -1324,6 +1374,39 @@ def regenerate_dnstt_key():
         print(json.dumps(request("POST", "/api/dnstt/genkey", {}), indent=2))
 
 
+def connection_protocols_visual():
+    cfg = request("GET", "/api/server/config") or {}
+    def mark(enabled): return "◉" if enabled else "○"
+    listen = cfg.get("listen") or "--"
+    extra = cfg.get("extra_listen") or []
+    tls = cfg.get("tls_forwarders") or []
+    blocks = [
+        ("OPENSSH", listen, True),
+        ("SSH/HTTP PÚBLICO", ", ".join([listen, *extra]), True),
+        ("TLS SSH", ", ".join(x.get("listen", "--") for x in tls) or "--", bool(tls)),
+        ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
+        ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
+        ("BTUN", "TCP " + str((cfg.get("btun") or {}).get("tcp_listen", "--")) + " / UDP " + str((cfg.get("btun") or {}).get("udp_listen", "--")), cfg.get("btun") is not None),
+        ("DNSTT", str((cfg.get("dnstt") or {}).get("domain", "--")) + " / " + str((cfg.get("dnstt") or {}).get("udp_listen", "--")), cfg.get("dnstt") is not None),
+        ("UDPGW", str((cfg.get("udpgw") or {}).get("listen", "--")), cfg.get("udpgw") is not None),
+        ("XRAY", str((cfg.get("xray") or {}).get("mode", "--")), bool(cfg.get("xray") and cfg["xray"].get("enabled", True))),
+    ]
+    width = min(74, max(40, terminal_columns() - 4))
+    print("┏" + "━" * width + "┓")
+    print("┃" + " MODOS DE CONEXIÓN ".center(width) + "┃")
+    print("┣" + "━" * width + "┫")
+    for i in range(0, len(blocks), 2):
+        def fmt(item):
+            name, value, enabled = item
+            return ("[" + mark(enabled) + "] " + name + ": " + value)
+        left = fmt(blocks[i])
+        right = fmt(blocks[i + 1]) if i + 1 < len(blocks) else ""
+        gap = 3; half = (width - gap) // 2
+        print("┃" + left[:half].ljust(half) + " " * gap + right[:width-half-gap].ljust(width-half-gap) + "┃")
+    print("┣" + "━" * width + "┫")
+    print("┃ [00] • RETORNAR".ljust(width + 1) + "┃")
+    print("┗" + "━" * width + "┛")
+
 def connection_menu():
     menu("MODOS DE CONEXIÓN", {
         "1": ("Puertos y transportes", connection_status),
@@ -1470,7 +1553,7 @@ def render_menu(title, options, vps_status=None, columns=None):
         single("Elegí una opción y presioná Enter: _"),
         bottom,
     ])
-    return "\n".join(lines)
+    return "\n".join(colorize_menu(lines))
 
 
 def clear_screen():
