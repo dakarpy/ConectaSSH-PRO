@@ -556,6 +556,7 @@ cat > "$INSTALL_DIR/config.json" <<EOF
   "local_ssh_listen": "127.0.0.1:2222",
   "host_key_file": "${INSTALL_DIR}/ssh_host_rsa_key",
   "quiet": false,
+  "pam_auth_enabled": true,
   "banner_file": "${INSTALL_DIR}/banner.txt",
   "xray": {
     "enabled": true,

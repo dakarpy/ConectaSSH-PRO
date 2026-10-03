@@ -44,7 +44,7 @@ The CLI generates SSH account passwords and Xray UUIDs when creating them. It do
 
 ## Menu features
 
-- **SSH users:** create and list accounts, 24-hour trials, renew or edit limits, inspect online usage and speed, reset traffic, remove individual or expired users.
+- **SSH users:** create and list accounts, 24-hour trials, renew or edit limits, inspect online usage and speed, reset traffic, remove individual or expired users. **PAM authentication is enabled by default** and can be activated or deactivated from `GESTOR DE USUARIOS SSH → PAM`. When enabled, regular Linux accounts (UID >= 1000) can authenticate using their `/etc/shadow` password and are auto-imported into the panel after a successful login.
 - **Xray:** manage inbounds and clients, generate UUIDs, adjust limits and quotas, reset traffic, edit JSON, control the service, and configure shared listener ports.
 - **Connection modes:** inspect SSH/TLS, DNSTT, BHTTP, BTUN, HCR, UDPGW, and Xray status, settings, and available logs; manage TLS certificates and DNSTT keys.
 - **VPS and traffic:** CPU, RAM, storage, uptime, per-interface traffic, daily/monthly totals, system logs, and update status.

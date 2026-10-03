@@ -1,6 +1,40 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadConfigDefaultsPAMEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{\"listen\":\"0.0.0.0:80\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.PAMAuthEnabled {
+		t.Fatal("PAM should default to enabled when the config field is absent")
+	}
+}
+
+func TestLoadConfigPreservesExplicitPAMDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{\"listen\":\"0.0.0.0:80\",\"pam_auth_enabled\":false}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PAMAuthEnabled {
+		t.Fatal("explicit pam_auth_enabled=false must remain disabled")
+	}
+}
 
 // Known crypt(3) test vectors covering the formats found in /etc/shadow across
 // old and new Linux. verifyCryptHash must accept the right password and reject
