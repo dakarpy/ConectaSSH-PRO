@@ -1,0 +1,41 @@
+# Build and generated files
+*.exe
+*.zip
+*.tar
+*.tar.gz
+*.tmp
+*.bak
+*.bak-*
+*.log
+/dist/
+/build/
+/bin/
+
+# Python generated files
+__pycache__/
+*.pyc
+
+# Local/runtime state and secrets
+.env
+.env.*
+*.key
+*.pem
+*.crt
+*.csr
+/certs/
+/logs/
+*.db
+*.sqlite
+*.sqlite3
+/sshpanel
+/xray
+/.installed_*
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Local test artifacts
+/tmp/
+*.test
