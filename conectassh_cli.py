@@ -48,27 +48,45 @@ def paint(text, color, bold=False):
 
 
 def colorize_menu(lines):
-    """Aplica el tema completo sin alterar el ancho calculado del menú."""
+    """Tema completo: marco cyan, encabezado con etiquetas cyan/valores verdes y menú por columnas."""
+    import re
     out = []
-    for line in lines:
-        raw = line
-        if raw.startswith(("┌", "└", "├", "┏", "┗", "┣")) or "┤" in raw or "┓" in raw or "┛" in raw:
+    header_labels = r"(Host:|SO:|Uptime:|Hora:|CPU:|Memoria:|UP/DOWN:|SERVICIO:)"
+    stats_labels = r"(Onlines:|Expirados:|Total:)"
+
+    for raw in lines:
+        # Marco siempre cyan. Esto incluye TODOS los bordes y separadores.
+        if raw.startswith(("┌", "└", "├", "┏", "┗", "┣")):
             out.append(paint(raw, CYAN))
             continue
+
         if "SCRIPT CONECTA SSH -" in raw:
-            out.append(paint(raw, WHITE, True))
+            out.append(paint(raw, CYAN, True))
             continue
+
         if "[00] • SALIR" in raw:
             out.append(paint(raw, RED, True))
             continue
+
         if "Elegí una opción" in raw:
-            out.append(paint(raw, CYAN))
+            out.append(paint(raw, CYAN, True))
             continue
-        if "[01]" in raw or "[02]" in raw or "[03]" in raw or "[04]" in raw or "[05]" in raw or "[06]" in raw or "[07]" in raw or "[08]" in raw or "[09]" in raw or "[10]" in raw or "[11]" in raw or "[12]" in raw or "[13]" in raw or "[14]" in raw or "[15]" in raw or "[16]" in raw or "[17]" in raw or "[18]" in raw or "[19]" in raw or "[20]" in raw or "[21]" in raw or "[22]" in raw or "[23]" in raw or "[24]" in raw or "[25]" in raw:
-            # Números y etiquetas: cian + amarillo, manteniendo el layout original.
-            import re
-            # Colorea CADA columna por separado. El patrón anterior tomaba
-            # solamente el texto hasta el primer borde vertical.
+
+        # Encabezado/estado del VPS: etiquetas cyan y valores verdes.
+        if any(label in raw for label in ("Host:", "SO:", "Uptime:", "Hora:", "CPU:", "Memoria:", "UP/DOWN:", "SERVICIO:")):
+            colored = re.sub(header_labels, lambda m: paint(m.group(1), CYAN, True), raw)
+            # Colorea solamente los valores después de cada etiqueta, sin tocar el borde.
+            colored = re.sub(r"(: )([^│]+?)(?=\s{2,}•|\s*│|$)", lambda m: ": " + paint(m.group(2), GREEN), colored)
+            out.append(colored)
+            continue
+
+        if any(label in raw for label in ("Onlines:", "Expirados:", "Total:")):
+            colored = re.sub(stats_labels, lambda m: paint(m.group(1), CYAN, True), raw)
+            colored = re.sub(r"(: )([^│]+?)(?=\s{2,}|\s*│|$)", lambda m: ": " + paint(m.group(2), WHITE, True), colored)
+            out.append(colored)
+            continue
+
+        if re.search(r"\[\d{2}\]\s*•", raw):
             def paint_entry(match):
                 number, bullet, label = match.groups()
                 return paint(number, CYAN, True) + bullet + paint(label, YELLOW)
@@ -79,12 +97,7 @@ def colorize_menu(lines):
             )
             out.append(colored)
             continue
-        if "Onlines:" in raw or "Expirados:" in raw or "Total:" in raw:
-            out.append(paint(raw, WHITE, True))
-            continue
-        if "SERVICIO:" in raw:
-            out.append(paint(raw, GREEN if "ACTIVO" in raw.upper() else RED, True))
-            continue
+
         out.append(raw)
     return out
 
