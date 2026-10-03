@@ -1443,7 +1443,6 @@ def render_menu(title, options, vps_status=None, columns=None):
                 f"Total: {total if total is not None else '--'}",
             ),
             separator,
-            single("MENU"),
         ])
 
     # Una sola columna evita que las opciones largas se corten en terminales SSH,
