@@ -732,7 +732,7 @@ BLOCKS = {
         ("disable_stats_log", "Silenciar registros de estadísticas", "bool"), ("disable_console_log", "Silenciar registros de consola", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
     )),
-    "bhttp": ("BHTTP", {"listen": ["0.0.0.0:8880"], "shared_ports": False}, (
+    "bhttp": ("BHTTP", {"listen": ["0.0.0.0:8080"], "shared_ports": False}, (
         ("listen", "Escuchas TCP", "list"), ("shared_ports", "Compartir puertos SSH/TLS", "bool"),
         ("session_timeout", "Tiempo de espera de sesión", "text"), ("max_v2_lanes", "Máximo de canales V2", "int"),
         ("max_sessions", "Máximo de sesiones", "int"), ("max_connections", "Máximo de conexiones", "int"),
@@ -750,8 +750,8 @@ BLOCKS = {
         ("disable_console_log", "Silenciar registros de consola", "bool"), ("log_connections", "Registrar conexiones", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
     )),
-    "hcr": ("HCR", {"listen": ["0.0.0.0:8181"], "shared_ports": False}, (
-        ("listen", "Escuchas TCP", "list"), ("shared_ports", "Compartir puertos SSH/TLS", "bool"),
+    "hcr": ("HCR", {"engine": "official", "listen": ["0.0.0.0:8880"], "shared_ports": False, "transport": "plain", "target": "127.0.0.1:22"}, (
+        ("listen", "Puerto HCR", "list"), ("engine", "Motor HCR", "choose:official/embedded"), ("transport", "Transporte HCR", "choose:plain/tls/auto"), ("target", "Destino SSH HCR", "text"), ("binary_path", "Binario HCR oficial", "text"), ("shared_ports", "Compartir puertos SSH/TLS", "bool"),
         ("max_connections", "Máximo de conexiones", "int"), ("max_sessions", "Máximo de sesiones", "int"),
         ("max_source_sessions", "Máximo de sesiones por IP", "int"),
         ("download_poll_timeout", "Tiempo de espera de sondeo de descarga", "text"),

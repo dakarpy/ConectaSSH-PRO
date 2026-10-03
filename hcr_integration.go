@@ -21,16 +21,26 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/dakarpy/ConectaSSH-PRO/internal/hcr"
+	"shell2/internal/hcr"
 )
 
 // HCRConfig defines the settings for the integrated HCR transport. A nil
 // *HCRConfig in the main config disables it entirely.
 type HCRConfig struct {
+	// Engine selects the implementation: official uses the eProxy hcr-server binary.
+	Engine     string `json:"engine,omitempty"`
+	BinaryPath string `json:"binary_path,omitempty"`
+	Transport  string `json:"transport,omitempty"`
+	Target     string `json:"target,omitempty"`
+	TLSCert    string `json:"tls_cert,omitempty"`
+	TLSKey     string `json:"tls_key,omitempty"`
+
 	// Listen lists the TCP addresses to bind. IPv6 addresses must use bracket
 	// form, e.g. "[::]:8181". Empty with SharedPorts off uses the default.
 	Listen []string `json:"listen"`
@@ -86,7 +96,7 @@ type HCRConfig struct {
 }
 
 const (
-	defaultHCRListen         = "0.0.0.0:8181"
+	defaultHCRListen         = "0.0.0.0:8880"
 	defaultHCRMaxConnections = 2048
 	defaultHCRMaxSessions    = 128
 	// hcrTargetLabel is only what shows up in logs; HCR never dials a real TCP
@@ -102,6 +112,7 @@ var (
 	hcrSharedPorts bool
 	hcrCtx         context.Context
 	hcrCancel      context.CancelFunc
+	hcrCmd         *exec.Cmd
 
 	hcrAutoMu     sync.Mutex
 	hcrAutoCancel context.CancelFunc
@@ -137,10 +148,12 @@ func stopHCRInstance() {
 	hcrMu.Lock()
 	listeners := hcrListeners
 	server := hcrServer
+	cmd := hcrCmd
 	cancel := hcrCancel
 	hcrListeners = nil
 	hcrAddrs = nil
 	hcrServer = nil
+	hcrCmd = nil
 	hcrSharedPorts = false
 	hcrCtx = nil
 	hcrCancel = nil
@@ -158,6 +171,10 @@ func stopHCRInstance() {
 		server.Close()
 		server.Wait()
 	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}
 }
 
 func stopHCRAutoRestart() {
@@ -172,7 +189,7 @@ func stopHCRAutoRestart() {
 func hcrRunning() bool {
 	hcrMu.Lock()
 	defer hcrMu.Unlock()
-	return hcrServer != nil
+	return hcrServer != nil || hcrCmd != nil
 }
 
 // hcrShareEnabled reports whether a running HCR server wants the shared proxy
@@ -180,7 +197,7 @@ func hcrRunning() bool {
 func hcrShareEnabled() bool {
 	hcrMu.Lock()
 	defer hcrMu.Unlock()
-	return hcrServer != nil && hcrSharedPorts
+	return hcrServer != nil && hcrCmd == nil && hcrSharedPorts
 }
 
 func hcrListenList() string {
@@ -213,9 +230,104 @@ func startHCR(cfg *HCRConfig) error {
 	return nil
 }
 
+func selectOfficialHCRBinary(cfg *HCRConfig) string {
+	if strings.TrimSpace(cfg.BinaryPath) != "" {
+		return strings.TrimSpace(cfg.BinaryPath)
+	}
+	if runtime.GOARCH == "amd64" {
+		return "/opt/sshpanel/hcr/hcr-server-linux-amd64"
+	}
+	if runtime.GOARCH == "arm64" {
+		return "/opt/sshpanel/hcr/hcr-server-linux-arm64"
+	}
+	return ""
+}
+
+func startOfficialHCR(cfg *HCRConfig) error {
+	if hcrLogBuf == nil {
+		hcrLogBuf = newRingLogBuffer(200)
+	}
+	logger := hcrLogger(cfg)
+	if cfg.SharedPorts {
+		return errors.New("hcr official: shared_ports no está soportado; use un puerto dedicado")
+	}
+	addrs := normalizeHCRListenList(cfg.Listen)
+	if len(addrs) != 1 {
+		return fmt.Errorf("hcr official: se requiere exactamente un listener, configurado=%v", addrs)
+	}
+	binary := selectOfficialHCRBinary(cfg)
+	if binary == "" {
+		return fmt.Errorf("hcr official: arquitectura no soportada: %s", runtime.GOARCH)
+	}
+	if st, err := os.Stat(binary); err != nil || st.IsDir() || st.Mode()&0111 == 0 {
+		return fmt.Errorf("hcr official: falta binario ejecutable %s", binary)
+	}
+	transport := strings.TrimSpace(cfg.Transport)
+	if transport == "" {
+		transport = "tls"
+	}
+	target := strings.TrimSpace(cfg.Target)
+	if target == "" {
+		target = "127.0.0.1:22"
+	}
+	args := []string{"-listen", addrs[0], "-target", target, "-transport", transport}
+	if cfg.TLSCert != "" {
+		args = append(args, "-tls-cert", cfg.TLSCert)
+	}
+	if cfg.TLSKey != "" {
+		args = append(args, "-tls-key", cfg.TLSKey)
+	}
+	if cfg.MaxConnections != 0 {
+		args = append(args, "-max-connections", fmt.Sprint(cfg.MaxConnections))
+	}
+	if cfg.MaxSessions != 0 {
+		args = append(args, "-max-sessions", fmt.Sprint(cfg.MaxSessions))
+	}
+	if cfg.MaxSourceSessions != 0 {
+		args = append(args, "-max-sessions-per-ip", fmt.Sprint(cfg.MaxSourceSessions))
+	}
+	if cfg.SessionStatsInterval != "" {
+		args = append(args, "-session-stats-interval", cfg.SessionStatsInterval)
+	}
+	if cfg.MaxDownloadFrame != 0 {
+		args = append(args, "-max-download-frame", fmt.Sprint(cfg.MaxDownloadFrame))
+	}
+	if cfg.DownloadPollTimeout != "" {
+		args = append(args, "-download-poll-timeout", cfg.DownloadPollTimeout)
+	}
+	cmd := exec.Command(binary, args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("hcr official: start: %w", err)
+	}
+	stopHCRInstance()
+	hcrMu.Lock()
+	hcrCmd = cmd
+	hcrAddrs = addrs
+	hcrSharedPorts = false
+	hcrMu.Unlock()
+	logger.Info("official eProxy HCR started", "binary", binary, "arch", runtime.GOARCH, "listen", addrs, "transport", transport, "target", target)
+	go func() {
+		err := cmd.Wait()
+		hcrMu.Lock()
+		if hcrCmd == cmd {
+			hcrCmd = nil
+		}
+		hcrMu.Unlock()
+		if err != nil {
+			logger.Warn("official HCR stopped", "err", err)
+		}
+	}()
+	return nil
+}
+
 func startHCRInstance(cfg *HCRConfig) error {
 	if cfg == nil {
 		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Engine), "official") {
+		return startOfficialHCR(cfg)
 	}
 	if hcrLogBuf == nil {
 		hcrLogBuf = newRingLogBuffer(200)

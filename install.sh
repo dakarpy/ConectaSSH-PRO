@@ -295,6 +295,26 @@ ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/menu
 info "  ConectaSSH-PRO CLI installed: menu (also conectassh)"
 mkdir -p "$INSTALL_DIR/source"
 rsync -a --delete --exclude '.git' --exclude 'source/' --exclude '__pycache__/' "$SCRIPT_DIR/" "$INSTALL_DIR/source/"
+
+
+install_official_hcr_binary() {
+  local arch src dst
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) src="$SCRIPT_DIR/hcr-server-linux-amd64"; dst="$INSTALL_DIR/hcr/hcr-server-linux-amd64" ;;
+    aarch64|arm64) src="$SCRIPT_DIR/hcr-server-linux-arm64"; dst="$INSTALL_DIR/hcr/hcr-server-linux-arm64" ;;
+    *) warn "  HCR oficial: arquitectura no soportada: $arch"; return 0 ;;
+  esac
+  mkdir -p "$INSTALL_DIR/hcr"
+  if [[ -f "$src" ]]; then
+    install -m 755 "$src" "$dst"
+    info "  HCR oficial instalado: $dst ($arch)"
+  else
+    warn "  Falta $src; agregalo al paquete para habilitar HCR oficial en esta arquitectura."
+  fi
+}
+
+install_official_hcr_binary
 if [[ -f "$SCRIPT_DIR/update.sh" ]]; then
   cp "$SCRIPT_DIR/update.sh" "$INSTALL_DIR/update.sh"
   chmod 700 "$INSTALL_DIR/update.sh"
