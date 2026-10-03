@@ -374,10 +374,8 @@ type UserConfig struct {
 	// When false and totp_secret is set, only the TOTP code is accepted.
 	AllowStaticPassword bool `json:"allow_static_password"`
 
-	// UsePAM is a legacy opt-in: when true, the supplied SSH password is
-	// verified against the Linux PAM auth stack (auth phase only) for the
-	// system account matching this username, instead of the panel-managed
-	// Password/TOTP. New users leave this false and keep the script's own auth.
+	// UsePAM enables Linux PAM authentication for the system account matching
+	// this username. New users default to true; callers can explicitly disable it.
 	UsePAM bool `json:"use_pam"`
 
 	MaxConnections int    `json:"max_connections"`
@@ -1428,20 +1426,21 @@ func (s *Store) EnsureUsersSchema(ctx context.Context) error {
 			totp_window INT NOT NULL DEFAULT 1,
 			totp_digits INT NOT NULL DEFAULT 6,
 			allow_static_password BOOLEAN NOT NULL DEFAULT FALSE,
-			use_pam BOOLEAN NOT NULL DEFAULT FALSE
+			use_pam BOOLEAN NOT NULL DEFAULT TRUE
 		)`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS totp_secret TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS totp_period INT NOT NULL DEFAULT 60`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS totp_window INT NOT NULL DEFAULT 1`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS totp_digits INT NOT NULL DEFAULT 6`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS allow_static_password BOOLEAN NOT NULL DEFAULT FALSE`,
-		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS use_pam BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS use_pam BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS data_quota_bytes BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS quota_action TEXT NOT NULL DEFAULT 'block'`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS quota_throttle_mbps INT NOT NULL DEFAULT 1`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS total_uplink_bytes BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE ssh_users ADD COLUMN IF NOT EXISTS total_downlink_bytes BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE ssh_users ALTER COLUMN password SET DEFAULT ''`,
+		`ALTER TABLE ssh_users ALTER COLUMN use_pam SET DEFAULT TRUE`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -1791,7 +1790,7 @@ func startAdminAPI(store *Store, addr string) {
 	mux.Handle("/check", http.HandlerFunc(handleCheck))
 
 	go func() {
-		log.Printf("ConectaSSH-PRO API listening on %s", addr)
+		log.Printf("DragonCoreSSH API listening on %s", addr)
 		server := &http.Server{
 			Addr:              addr,
 			Handler:           secureAPIHandler(mux),
@@ -1919,7 +1918,7 @@ type UserPayload struct {
 	TOTPWindow          int     `json:"totp_window"`
 	TOTPDigits          int     `json:"totp_digits"`
 	AllowStaticPassword bool    `json:"allow_static_password"`
-	UsePAM              bool    `json:"use_pam"`
+	UsePAM              *bool   `json:"use_pam"`
 	OwnerUsername       string  `json:"owner_username,omitempty"`
 	ServerID            string  `json:"server_id,omitempty"`
 }
@@ -1941,6 +1940,11 @@ func handleCreateUser(store *Store) http.HandlerFunc {
 			return
 		}
 		p.Username = strings.TrimSpace(p.Username)
+		// PAM is enabled by default for API-created users. Send use_pam=false explicitly to disable it.
+		usePAM := true
+		if p.UsePAM != nil {
+			usePAM = *p.UsePAM
+		}
 		if p.Username == "" {
 			http.Error(w, "username required", http.StatusBadRequest)
 			return
@@ -2042,7 +2046,7 @@ func handleCreateUser(store *Store) http.HandlerFunc {
 			if err == sql.ErrNoRows {
 				// PAM users authenticate against the system account, so they
 				// need neither a panel password nor a TOTP secret.
-				if strings.TrimSpace(p.TOTPSecret) == "" && !p.UsePAM {
+				if strings.TrimSpace(p.TOTPSecret) == "" && !usePAM {
 					http.Error(w, "password or totp_secret required for new user", http.StatusBadRequest)
 					return
 				}
@@ -2096,7 +2100,7 @@ func handleCreateUser(store *Store) http.HandlerFunc {
 			TOTPWindow:          p.TOTPWindow,
 			TOTPDigits:          p.TOTPDigits,
 			AllowStaticPassword: p.AllowStaticPassword,
-			UsePAM:              p.UsePAM,
+			UsePAM:              usePAM,
 			OwnerUsername:       ownerUsername,
 		}
 

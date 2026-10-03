@@ -384,10 +384,10 @@ def create_user(default_days=30, test_hours=None):
         raise CLIError("El usuario es obligatorio")
     if get_user(name):
         raise CLIError("El usuario ya existe; elegí Editar usuario SSH")
-    password = secrets.token_urlsafe(18)
+    password = f"{secrets.randbelow(1000000):06d}"
     expires_at = ((dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=test_hours)).isoformat(timespec="seconds")
                   if test_hours else expiry(str(default_days)))
-    use_pam = ask("¿Usar autenticación PAM para este usuario? (sí/no)", "no").lower() in ("sí", "si", "s", "yes", "y")
+    use_pam = ask("¿Usar autenticación PAM para este usuario? (sí/no)", "sí").lower() in ("sí", "si", "s", "yes", "y")
     p = {"username": name, "password": password, "max_connections": number("Máximo de conexiones", 1, 0, 10000),
          "expires_at": expires_at, "limit_mbps_up": 0, "limit_mbps_down": 0,
          "data_quota_bytes": 0, "quota_action": "throttle", "quota_throttle_mbps": 10,
@@ -419,7 +419,7 @@ def edit_user():
         p["quota_action"] = ask("Al alcanzar la cuota: limitar/bloquear", u.get("quota_action") or "throttle")
         p["quota_throttle_mbps"] = number("Velocidad limitada en Mbps", u.get("quota_throttle_mbps") or 10)
     elif choice == "5":
-        p["password"] = secrets.token_urlsafe(18)
+        p["password"] = f"{secrets.randbelow(1000000):06d}"
     elif choice == "6":
         p["use_pam"] = ask("¿Usar autenticación PAM? (sí/no)", "sí" if u.get("use_pam") else "no").lower() in ("sí", "si", "s", "yes", "y")
         if p["use_pam"]:
