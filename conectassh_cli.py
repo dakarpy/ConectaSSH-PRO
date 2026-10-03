@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ConectaSSH-PRO terminal administration. Python 3 standard library only.
+"""DragonCoreSSH terminal administration. Python 3 standard library only.
 
 Root access to /opt/sshpanel/.env acts as local administrator authentication.
 Passwords are generated; no password input or interactive login is requested.
@@ -26,9 +26,9 @@ import urllib.request
 import uuid
 
 
-INSTALL_DIR = Path(os.environ.get("CONECTASSH_DIR", "/opt/sshpanel"))
+INSTALL_DIR = Path(os.environ.get("DRAGONCORE_DIR", "/opt/sshpanel"))
 ENV_FILE = INSTALL_DIR / ".env"
-SERVICE = os.environ.get("CONECTASSH_SERVICE", "sshpanel")
+SERVICE = os.environ.get("DRAGONCORE_SERVICE", "sshpanel")
 
 
 class CLIError(Exception):
@@ -117,7 +117,7 @@ def write_env_token(token):
     if not replaced:
         out.append("ADMIN_TOKEN=" + token + "\n")
     old = os.stat(ENV_FILE, follow_symlinks=False)
-    fd, tmp = tempfile.mkstemp(prefix=".env.conectassh-", dir=ENV_FILE.parent)
+    fd, tmp = tempfile.mkstemp(prefix=".env.dragoncore-", dir=ENV_FILE.parent)
     try:
         os.fchmod(fd, 0o600)
         os.fchown(fd, old.st_uid, old.st_gid)
@@ -210,7 +210,7 @@ def size(n):
 
 
 def terminal_columns():
-    override = os.environ.get("CONECTASSH_COLUMNS", "")
+    override = os.environ.get("DRAGONCORE_COLUMNS", "")
     if override.isdecimal() and 24 <= int(override) <= 240:
         return int(override)
     return max(24, shutil.get_terminal_size(fallback=(80, 24)).columns)
@@ -243,7 +243,7 @@ def local_meminfo():
 
 
 def collect_vps_status():
-    """Read live host and ConectaSSH-PRO data; degraded API data never blocks the menu."""
+    """Read live host and DragonCore data; degraded API data never blocks the menu."""
     try:
         os_name = next((line.split("=", 1)[1].strip().strip('"')
                         for line in Path("/etc/os-release").read_text().splitlines()
@@ -387,9 +387,13 @@ def create_user(default_days=30, test_hours=None):
     password = secrets.token_urlsafe(18)
     expires_at = ((dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=test_hours)).isoformat(timespec="seconds")
                   if test_hours else expiry(str(default_days)))
+    use_pam = ask("¿Usar autenticación PAM para este usuario? (sí/no)", "no").lower() in ("sí", "si", "s", "yes", "y")
     p = {"username": name, "password": password, "max_connections": number("Máximo de conexiones", 1, 0, 10000),
          "expires_at": expires_at, "limit_mbps_up": 0, "limit_mbps_down": 0,
-         "data_quota_bytes": 0, "quota_action": "throttle", "quota_throttle_mbps": 10}
+         "data_quota_bytes": 0, "quota_action": "throttle", "quota_throttle_mbps": 10,
+         "use_pam": use_pam}
+    if use_pam:
+        print("Aviso: el usuario PAM debe existir como cuenta Linux válida en /etc/passwd y /etc/shadow.")
     request("POST", "/api/users/create", p)
     print(f"Usuario SSH: {name}\nContraseña SSH generada: {password}")
 
@@ -400,7 +404,7 @@ def edit_user():
     if not u:
         raise CLIError("Usuario no encontrado")
     p = user_payload(u)
-    print("1 Vencimiento   2 Conexiones   3 Ancho de banda   4 Cuota   5 Generar nueva contraseña")
+    print("1 Vencimiento   2 Conexiones   3 Ancho de banda   4 Cuota   5 Generar nueva contraseña   6 PAM")
     choice = ask("Opción")
     if choice == "1":
         p["expires_at"] = expiry(str(u.get("expires_at") or "")[:10])
@@ -416,6 +420,10 @@ def edit_user():
         p["quota_throttle_mbps"] = number("Velocidad limitada en Mbps", u.get("quota_throttle_mbps") or 10)
     elif choice == "5":
         p["password"] = secrets.token_urlsafe(18)
+    elif choice == "6":
+        p["use_pam"] = ask("¿Usar autenticación PAM? (sí/no)", "sí" if u.get("use_pam") else "no").lower() in ("sí", "si", "s", "yes", "y")
+        if p["use_pam"]:
+            print("Aviso: el usuario PAM debe existir como cuenta Linux válida en /etc/passwd y /etc/shadow.")
     else:
         return
     request("POST", "/api/users/create", p)
@@ -537,7 +545,7 @@ def xray_shared_port():
             raise CLIError("El protocolo debe ser vless o vmess")
         client_uuid = str(uuid.uuid4())
         inbound = {"tag": tag, "protocol": protocol,
-                   "settings": {"clients": [{"id": client_uuid, "email": tag + "@conectassh.local"}]}}
+                   "settings": {"clients": [{"id": client_uuid, "email": tag + "@dragoncore.local"}]}}
         inbounds.append(inbound)
         print("UUID del cliente generado:", client_uuid)
     else:
@@ -575,7 +583,7 @@ def xray_create():
         raise CLIError("El nombre del cliente es obligatorio")
     client_uuid = str(uuid.uuid4())
     data = {"inbound_tag": tag, "uuid": client_uuid,
-            "name": name, "email": name.lower().replace(" ", "-") + "@conectassh.local",
+            "name": name, "email": name.lower().replace(" ", "-") + "@dragoncore.local",
             "expires_at": expiry("30"), "max_connections": 0,
             "data_quota_bytes": 0, "quota_action": "block", "quota_throttle_mbps": 1}
     request("POST", "/api/xray/clients/add", data)
@@ -1001,7 +1009,7 @@ def xray_inbound_add():
         stream["wsSettings" if transport == "ws" else "xhttpSettings"] = {"path": path}
     client_id = str(uuid.uuid4())
     inbound = {"tag": tag, "protocol": protocol, "listen": listen, "port": port,
-               "settings": {"clients": [{"id": client_id, "email": tag + "@conectassh.local"}]},
+               "settings": {"clients": [{"id": client_id, "email": tag + "@dragoncore.local"}]},
                "streamSettings": stream}
     if protocol == "vless":
         inbound["settings"]["decryption"] = "none"
@@ -1444,9 +1452,8 @@ def render_menu(title, options, vps_status=None, columns=None):
     for key, (label, _) in options.items():
         lines.append(single(f"[{str(key).zfill(2)}] • {label}"))
 
-    # En el menú principal, la salida queda como opción visible y numerada.
-    if title.upper().startswith("MAIN MENU"):
-        lines.append(single("[00] • SALIR"))
+    # Todos los menús y submenús tienen una salida uniforme en [00].
+    lines.append(single("[00] • SALIR"))
 
     lines.extend([
         separator,
@@ -1587,14 +1594,14 @@ def main_menu_options():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ConectaSSH-PRO CLI administration")
+    parser = argparse.ArgumentParser(description="DragonCoreSSH CLI administration")
     parser.add_argument("--mobile", action="store_true", help="force a 40-column phone layout")
     parser.add_argument("command", nargs="?", choices=("menu", "status", "users", "api-password", "logs", "update"), default="menu")
     parser.add_argument("action", nargs="?", choices=("show", "change"))
     args = parser.parse_args()
     require_root()
     if args.mobile:
-        os.environ["CONECTASSH_COLUMNS"] = "68"
+        os.environ["DRAGONCORE_COLUMNS"] = "68"
     if args.command == "api-password":
         if args.action == "show":
             print(api_password())
