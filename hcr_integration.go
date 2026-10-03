@@ -32,6 +32,11 @@ import (
 
 // HCRConfig defines the settings for the integrated HCR transport. A nil
 // *HCRConfig in the main config disables it entirely.
+const (
+	defaultHCRDownloadPollTimeout = 20 * time.Second
+	defaultHCRMaxDownloadFrame    = 774
+)
+
 type HCRConfig struct {
 	// Engine selects the implementation: official uses the eProxy hcr-server binary.
 	Engine     string `json:"engine,omitempty"`
@@ -63,11 +68,11 @@ type HCRConfig struct {
 	MaxSourceSessions int `json:"max_source_sessions,omitempty"`
 
 	// DownloadPollTimeout bounds a long-poll with no data. Empty defaults to
-	// "10s".
+	// "20s".
 	DownloadPollTimeout string `json:"download_poll_timeout,omitempty"`
 
 	// MaxDownloadFrame is the largest record read from the target per frame, in
-	// bytes. Zero or out-of-range uses 16384.
+	// bytes. Zero or out-of-range uses 774.
 	MaxDownloadFrame int `json:"max_download_frame,omitempty"`
 
 	// IdleSessionTimeout drops a session that sees no traffic for this long.
@@ -286,15 +291,21 @@ func startOfficialHCR(cfg *HCRConfig) error {
 	if cfg.MaxSourceSessions != 0 {
 		args = append(args, "-max-sessions-per-ip", fmt.Sprint(cfg.MaxSourceSessions))
 	}
-	if cfg.SessionStatsInterval != "" {
-		args = append(args, "-session-stats-interval", cfg.SessionStatsInterval)
+	statsInterval := cfg.SessionStatsInterval
+	if statsInterval == "" {
+		statsInterval = "10s"
 	}
-	if cfg.MaxDownloadFrame != 0 {
-		args = append(args, "-max-download-frame", fmt.Sprint(cfg.MaxDownloadFrame))
+	args = append(args, "-session-stats-interval", statsInterval)
+	maxDownloadFrame := cfg.MaxDownloadFrame
+	if maxDownloadFrame <= 0 {
+		maxDownloadFrame = defaultHCRMaxDownloadFrame
 	}
-	if cfg.DownloadPollTimeout != "" {
-		args = append(args, "-download-poll-timeout", cfg.DownloadPollTimeout)
+	args = append(args, "-max-download-frame", fmt.Sprint(maxDownloadFrame))
+	pollTimeout := cfg.DownloadPollTimeout
+	if pollTimeout == "" {
+		pollTimeout = defaultHCRDownloadPollTimeout.String()
 	}
+	args = append(args, "-download-poll-timeout", pollTimeout)
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -356,14 +367,19 @@ func startHCRInstance(cfg *HCRConfig) error {
 	}
 
 	server := hcr.NewServer(&hcr.Config{
-		TargetAddr:           hcrTargetLabel,
-		DialTarget:           func() (net.Conn, error) { return dialInternalSSH(hcrTargetLabel) },
-		Logger:               logger,
-		MaxConnections:       maxConnections,
-		MaxSessions:          maxSessions,
-		MaxSourceSessions:    cfg.MaxSourceSessions,
-		DownloadPollTimeout:  hcrDurationOrDefault(cfg.DownloadPollTimeout, 8*time.Second, "download_poll_timeout", logger),
-		MaxDownloadFrame:     cfg.MaxDownloadFrame,
+		TargetAddr:          hcrTargetLabel,
+		DialTarget:          func() (net.Conn, error) { return dialInternalSSH(hcrTargetLabel) },
+		Logger:              logger,
+		MaxConnections:      maxConnections,
+		MaxSessions:         maxSessions,
+		MaxSourceSessions:   cfg.MaxSourceSessions,
+		DownloadPollTimeout: hcrDurationOrDefault(cfg.DownloadPollTimeout, defaultHCRDownloadPollTimeout, "download_poll_timeout", logger),
+		MaxDownloadFrame: func() int {
+			if cfg.MaxDownloadFrame > 0 {
+				return cfg.MaxDownloadFrame
+			}
+			return defaultHCRMaxDownloadFrame
+		}(),
 		IdleSessionTimeout:   hcrDurationOrDefault(cfg.IdleSessionTimeout, 2*time.Minute, "idle_session_timeout", logger),
 		SessionStatsInterval: hcrDurationOrDefault(cfg.SessionStatsInterval, 10*time.Second, "session_stats_interval", logger),
 	})
