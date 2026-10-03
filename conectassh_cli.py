@@ -1681,7 +1681,30 @@ def menu(title, options, two_columns=False):
                 print()
 
 
+def pam_auth_menu():
+    """Configura la autenticación PAM global del servidor."""
+    document = request("GET", "/api/server/config") or {}
+    current = bool(document.get("pam_auth_enabled", False))
+
+    def set_pam(enabled):
+        document = request("GET", "/api/server/config") or {}
+        document["pam_auth_enabled"] = bool(enabled)
+        save_settings("/api/server/config", document)
+        print("Autenticación PAM:", "ACTIVO" if enabled else "DESACTIVADO")
+        if enabled:
+            print("Las cuentas Linux válidas pueden autenticarse mediante /etc/passwd y /etc/shadow.")
+
+    state = "ACTIVO" if current else "DESACTIVADO"
+    menu("AUTENTICACIÓN PAM", {
+        "1": ("ACTIVAR PAM", lambda: set_pam(True)),
+        "2": ("DESACTIVAR PAM", lambda: set_pam(False)),
+    }, two_columns=True)
+    print(f"Estado actual: {state}")
+
+
 def ssh_menu():
+    document = request("GET", "/api/server/config") or {}
+    pam_state = "ACTIVO" if document.get("pam_auth_enabled", True) else "DESACTIVADO"
     menu("GESTOR DE USUARIOS SSH", {
         "1": ("Crear usuario", create_user),
         "2": ("Crear prueba", lambda: create_user(test_hours=24)),
@@ -1692,6 +1715,7 @@ def ssh_menu():
         "7": ("Remover expirados", delete_expired_users),
         "8": ("Listar usuarios", list_users),
         "9": ("Restablecer tráfico", reset_traffic),
+        "10": (f"AUTENTICACIÓN PAM: {pam_state}", pam_auth_menu),
     }, two_columns=True)
 
 

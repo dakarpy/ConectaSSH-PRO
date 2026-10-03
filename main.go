@@ -1304,6 +1304,14 @@ func loadConfig(path string) (*Config, map[string]*UserState, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse config: %w", err)
 	}
+	// PAM is enabled by default for new installations/configurations. Preserve
+	// an explicit false so existing administrators can disable it intentionally.
+	var rawConfig map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawConfig); err == nil {
+		if _, present := rawConfig["pam_auth_enabled"]; !present {
+			cfg.PAMAuthEnabled = true
+		}
+	}
 	if cfg.Xray != nil {
 		cfg.Xray.NormalizeDefaults()
 	}
