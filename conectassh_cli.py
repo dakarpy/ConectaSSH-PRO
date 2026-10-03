@@ -48,7 +48,7 @@ def paint(text, color, bold=False):
 
 
 def colorize_menu(lines):
-    """Aplica el esquema visual sin alterar el ancho calculado del menú."""
+    """Aplica el tema completo sin alterar el ancho calculado del menú."""
     out = []
     for line in lines:
         raw = line
@@ -1392,9 +1392,9 @@ def connection_protocols_visual():
         ("XRAY", str((cfg.get("xray") or {}).get("mode", "--")), bool(cfg.get("xray") and cfg["xray"].get("enabled", True))),
     ]
     width = min(74, max(40, terminal_columns() - 4))
-    print("┏" + "━" * width + "┓")
-    print("┃" + " MODOS DE CONEXIÓN ".center(width) + "┃")
-    print("┣" + "━" * width + "┫")
+    print(paint("┏" + "━" * width + "┓", CYAN))
+    print(paint("┃" + " MODOS DE CONEXIÓN ".center(width) + "┃", CYAN, True))
+    print(paint("┣" + "━" * width + "┫", CYAN))
     for i in range(0, len(blocks), 2):
         def fmt(item):
             name, value, enabled = item
@@ -1402,22 +1402,24 @@ def connection_protocols_visual():
         left = fmt(blocks[i])
         right = fmt(blocks[i + 1]) if i + 1 < len(blocks) else ""
         gap = 3; half = (width - gap) // 2
-        print("┃" + left[:half].ljust(half) + " " * gap + right[:width-half-gap].ljust(width-half-gap) + "┃")
-    print("┣" + "━" * width + "┫")
-    print("┃ [00] • RETORNAR".ljust(width + 1) + "┃")
-    print("┗" + "━" * width + "┛")
+        row_text = "┃" + left[:half].ljust(half) + " " * gap + right[:width-half-gap].ljust(width-half-gap) + "┃"
+        print(paint(row_text, GREEN if "◉" in row_text else RED))
+    print(paint("┣" + "━" * width + "┫", CYAN))
+    print(paint("┃ [00] • RETORNAR".ljust(width + 1) + "┃", RED, True))
+    print(paint("┗" + "━" * width + "┛", CYAN))
 
 def connection_menu():
     menu("MODOS DE CONEXIÓN", {
-        "1": ("Puertos y transportes", connection_status),
-        "2": ("Estadísticas DNSTT / BHTTP / HCR / BTUN", protocol_stats),
-        "3": ("Escuchas y configuración de protocolos", server_settings_menu),
-        "4": ("Certificados TLS", certificate_list),
-        "5": ("Clave pública DNSTT", lambda: print(json.dumps(request("GET", "/api/dnstt/pubkey"), indent=2))),
-        "6": ("Registros de protocolos", protocol_logs),
-        "7": ("Generar certificado TLS autofirmado", generate_tls_certificate),
-        "8": ("Solicitar certificado Let's Encrypt", lambda: generate_tls_certificate(True)),
-        "9": ("Regenerar clave DNSTT", regenerate_dnstt_key),
+        "1": ("Estado visual de protocolos", connection_protocols_visual),
+        "2": ("Puertos y transportes", connection_status),
+        "3": ("Estadísticas DNSTT / BHTTP / HCR / BTUN", protocol_stats),
+        "4": ("Escuchas y configuración de protocolos", server_settings_menu),
+        "5": ("Certificados TLS", certificate_list),
+        "6": ("Clave pública DNSTT", lambda: print(json.dumps(request("GET", "/api/dnstt/pubkey"), indent=2))),
+        "7": ("Registros de protocolos", protocol_logs),
+        "8": ("Generar certificado TLS autofirmado", generate_tls_certificate),
+        "9": ("Solicitar certificado Let's Encrypt", lambda: generate_tls_certificate(True)),
+        "10": ("Regenerar clave DNSTT", regenerate_dnstt_key),
     })
 
 
@@ -1466,8 +1468,8 @@ def update_from_git():
     print("Actualización completa. Volvé a abrir el menú para cargar la CLI actualizada.")
 
 
-def render_menu(title, options, vps_status=None, columns=None):
-    """Render a boxed SSHorizon-style terminal menu with two columns."""
+def render_menu(title, options, vps_status=None, columns=None, two_columns=False):
+    """Render a boxed terminal menu; optionally use the compact two-column layout."""
     cols = columns or terminal_columns()
     # Keep the frame compact on phones, but use the reference layout on normal SSH terminals.
     width = min(76, max(24, cols - 2))
@@ -1539,20 +1541,24 @@ def render_menu(title, options, vps_status=None, columns=None):
             separator,
         ])
 
-    # Una sola columna evita que las opciones largas se corten en terminales SSH,
-    # especialmente en celulares. El ancho se adapta al terminal y cada opción ocupa
-    # una línea completa del cuadro.
-    for key, (label, _) in options.items():
-        lines.append(single(f"[{str(key).zfill(2)}] • {str(label).upper()}"))
+    entries = list(options.items())
+    if two_columns:
+        for i in range(0, len(entries), 2):
+            left_key, (left_label, _) = entries[i]
+            if i + 1 < len(entries):
+                right_key, (right_label, _) = entries[i + 1]
+                lines.append(row(f"[{str(left_key).zfill(2)}] • {str(left_label).upper()}",
+                                 f"[{str(right_key).zfill(2)}] • {str(right_label).upper()}"))
+            else:
+                lines.append(single(f"[{str(left_key).zfill(2)}] • {str(left_label).upper()}"))
+    else:
+        for key, (label, _) in entries:
+            lines.append(single(f"[{str(key).zfill(2)}] • {str(label).upper()}"))
 
     # Todos los menús y submenús tienen una salida uniforme en [00].
     lines.append(single("[00] • SALIR"))
 
-    lines.extend([
-        separator,
-        single("Elegí una opción y presioná Enter: _"),
-        bottom,
-    ])
+    lines.append(bottom)
     return "\n".join(colorize_menu(lines))
 
 
@@ -1565,7 +1571,7 @@ def clear_screen():
 _menu_calls = 0
 
 
-def menu(title, options):
+def menu(title, options, two_columns=False):
     global _menu_calls
     _menu_calls += 1
     page = 0
@@ -1573,17 +1579,21 @@ def menu(title, options):
         clear_screen()
         vps = collect_vps_status() if title == "MAIN MENU" else None
         current_options = options() if callable(options) else options
-        # Menú de una sola columna: menos ancho y más legible en móvil.
+        # Dos columnas en terminales normales cuando las etiquetas caben; una columna en móvil.
+        labels = [str(label) for label, _ in current_options.values()]
+        half = max(1, (terminal_columns() - 8) // 2)
+        auto_two_columns = terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels)
         page_size = 8 if terminal_columns() <= 48 else 12
         entries = list(current_options.items())
         pages = max(1, (len(entries) + page_size - 1) // page_size)
         page = min(page, pages - 1)
         visible = dict(entries[page * page_size:(page + 1) * page_size])
         heading = title + (f" ({page + 1}/{pages})" if pages > 1 else "")
-        print(render_menu(heading, visible, vps))
+        print(render_menu(heading, visible, vps, two_columns=auto_two_columns))
+        prompt = paint("Elegí una opción: ", CYAN, True)
         if pages > 1:
             print(" n  Página siguiente   p  Página anterior")
-        choice = input("Elegí una opción: ").strip().lstrip("0") or "0"
+        choice = input(prompt).strip().lstrip("0") or "0"
         if choice.lower() in ("n", "p") and pages > 1:
             page = min(pages - 1, page + 1) if choice.lower() == "n" else max(0, page - 1)
             continue
@@ -1610,14 +1620,18 @@ def menu(title, options):
 
 
 def ssh_menu():
-    menu("CUENTAS SSH", {"1": ("Listar / conexiones / consumo", list_users),
-                          "2": ("Crear (contraseña generada)", create_user),
-                          "3": ("Crear prueba (24 horas)", lambda: create_user(test_hours=24)),
-                          "4": ("Editar / renovar / cambiar contraseña", edit_user),
-                          "5": ("Informe detallado de cuenta", user_report),
-                          "6": ("Restablecer tráfico", reset_traffic),
-                          "7": ("Eliminar usuarios vencidos", delete_expired_users),
-                          "8": ("Eliminar un usuario", delete_user)})
+    menu("GESTOR DE USUARIOS SSH", {
+        "1": ("Crear usuario", create_user),
+        "2": ("Crear prueba", lambda: create_user(test_hours=24)),
+        "3": ("Remover usuario", delete_user),
+        "4": ("Renovar / editar usuario", edit_user),
+        "5": ("Usuarios online", user_report),
+        "6": ("Relatorio usuarios", user_report),
+        "7": ("Remover expirados", delete_expired_users),
+        "8": ("Listar usuarios", list_users),
+        "9": ("Restablecer tráfico", reset_traffic),
+        "10": ("Modos de conexión", connection_menu),
+    }, two_columns=True)
 
 
 def xray_action(action):
