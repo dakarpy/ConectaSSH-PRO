@@ -395,7 +395,18 @@ def create_user(default_days=30, test_hours=None):
     if use_pam:
         print("Aviso: el usuario PAM debe existir como cuenta Linux válida en /etc/passwd y /etc/shadow.")
     request("POST", "/api/users/create", p)
-    print(f"Usuario SSH: {name}\nContraseña SSH generada: {password}")
+    expira = str(expires_at or "nunca")[:10]
+    if expira and expira != "nunca":
+        try:
+            expira = dt.datetime.fromisoformat(expira).strftime("%d/%m/%Y")
+        except ValueError:
+            pass
+    print("\n[✓] CRIADO COM SUCESSO !")
+    print(f"USUARIO: {name}")
+    print(f"SENHA: {password}")
+    print(f"LIMITE: {p["max_connections"]}")
+    print(f"EXPIRA EM: {expira}")
+    print("[Enter] para continuar")
 
 
 def edit_user():
