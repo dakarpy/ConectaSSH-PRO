@@ -134,7 +134,7 @@ func startUDPGWInstance(cfg *UDPGWConfig) error {
 	if cfg == nil {
 		return nil
 	}
-	// Default the listen address to the standalone default (0.0.0.0:7400) if
+	// Default the listen address to the ConectaSSH-PRO default (0.0.0.0:7300) if
 	// unspecified.  This matches the behaviour of the original
 	// badvpn-udpgw program, which listens on all interfaces by default.
 	listenAddr := cfg.Listen

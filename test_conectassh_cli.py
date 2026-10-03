@@ -69,7 +69,7 @@ class TokenManagementTest(unittest.TestCase):
         self.assertNotIn("Resellers", menu_text)
         mobile = cli.render_menu("MAIN MENU", cli.main_menu_options(), status, columns=40)
         self.assertLessEqual(max(map(len, mobile.splitlines())), 40)
-        self.assertIn("CPU: 12.5%", mobile)
+        self.assertIn("CPU: 2 (12.5%", mobile)
         self.assertIn("Onlines: 1", mobile)
 
     def test_menu_clears_on_open_and_redraw_after_output_pause(self):
@@ -99,7 +99,7 @@ class TokenManagementTest(unittest.TestCase):
         with patch("builtins.input", side_effect=["1", "0"]), redirect_stdout(io.StringIO()) as output:
             cli.menu("TEST", options)
         self.assertEqual(len(calls), 2)
-        self.assertIn("New", output.getvalue())
+        self.assertIn("NEW", output.getvalue())
 
     def test_server_setting_updates_one_field_and_keeps_other_blocks(self):
         config = {"listen": "0.0.0.0:80", "extra_listen": [],
@@ -124,7 +124,7 @@ class TokenManagementTest(unittest.TestCase):
                 redirect_stdout(io.StringIO()):
             cli.toggle_block("hcr")
         payload = request.call_args.args[2]
-        self.assertEqual(payload["hcr"]["listen"], ["0.0.0.0:8181"])
+        self.assertEqual(payload["hcr"]["listen"], ["0.0.0.0:8880"])
 
     def test_bot_setting_keeps_existing_token_flags(self):
         bot = {"enabled": True, "has_telegram_token": True, "telegram_token": "",
@@ -155,7 +155,7 @@ class TokenManagementTest(unittest.TestCase):
             self.assertIs(config["5"][1], cli.xray_settings_menu)
             self.assertIs(config["6"][1], cli.bot_settings_menu)
             cli.connection_menu()
-            self.assertIs(open_menu.call_args.args[1]["3"][1], cli.server_settings_menu)
+            self.assertIs(open_menu.call_args.args[1]["3"][1], cli.protocol_stats)
             cli.xray_menu()
             self.assertIs(open_menu.call_args.args[1]["7"][1], cli.xray_settings_menu)
 
@@ -171,7 +171,7 @@ class TokenManagementTest(unittest.TestCase):
                 redirect_stdout(io.StringIO()) as output:
             cli.menu("SETTINGS", options)
         self.assertEqual(chosen, [11])
-        self.assertIn("Setting 11", output.getvalue())
+        self.assertIn("SETTING 11", output.getvalue())
 
     def test_user_list_fits_phone_terminal(self):
         users = [{"username": "account-with-a-long-name", "active_conns": 2,

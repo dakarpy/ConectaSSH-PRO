@@ -14,7 +14,7 @@ const (
 	defaultExtraListen    = "0.0.0.0:8080"
 	defaultLocalSSHListen = "127.0.0.1:2222"
 	defaultDNSTTListen    = "0.0.0.0:5300"
-	defaultUDPGWListen    = "0.0.0.0:7400"
+	defaultUDPGWListen    = "0.0.0.0:7300"
 )
 
 // normalizeDurationField validates one optional duration setting in place. An

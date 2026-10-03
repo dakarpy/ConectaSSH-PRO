@@ -831,7 +831,7 @@ BLOCKS = {
         ("disable_console_log", "Silenciar registros de consola", "bool"), ("log_connections", "Registrar conexiones", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
     )),
-    "btun": ("BTUN", {"tcp_listen": "0.0.0.0:7300", "udp_listen": "", "manage_routing": True}, (
+    "btun": ("BTUN", {"tcp_listen": "0.0.0.0:7301", "udp_listen": "0.0.0.0:7302", "manage_routing": True}, (
         ("tcp_listen", "Escucha TCP", "text"), ("udp_listen", "Escucha UDP", "text"),
         ("shared_ports", "Compartir puertos SSH/TLS", "bool"), ("tun_name", "Interfaz TUN", "text"),
         ("subnet", "Subred privada CIDR", "text"), ("gateway", "Puerta de enlace CIDR", "text"),
@@ -852,7 +852,7 @@ BLOCKS = {
         ("disable_console_log", "Silenciar registros de consola", "bool"), ("log_connections", "Registrar conexiones", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
     )),
-    "udpgw": ("UDPGW", {"listen": "0.0.0.0:7400"}, (
+    "udpgw": ("UDPGW", {"listen": "0.0.0.0:7300"}, (
         ("listen", "Escucha TCP", "text"), ("max_frame", "Máximo de bytes por trama", "int"),
         ("debug", "Registros de depuración", "bool"), ("hexdump", "Bytes del volcado hexadecimal", "int"),
         ("write_chan", "Tamaño de cola de escritura", "int"), ("udp_bind", "IP de enlace UDP", "text"),

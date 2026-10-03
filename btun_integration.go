@@ -126,8 +126,8 @@ type BTUNConfig struct {
 }
 
 const (
-	defaultBTUNTCPListen        = "0.0.0.0:7300"
-	defaultBTUNUDPListen        = "0.0.0.0:7300"
+	defaultBTUNTCPListen        = "0.0.0.0:7301"
+	defaultBTUNUDPListen        = "0.0.0.0:7302"
 	defaultBTUNName             = "btun0"
 	defaultBTUNSubnet           = "10.77.0.0/16"
 	defaultBTUNMTU              = 1400

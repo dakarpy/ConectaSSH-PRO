@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"shell2/internal/hcr"
+	"github.com/dakarpy/ConectaSSH-PRO/internal/hcr"
 )
 
 // HCRConfig defines the settings for the integrated HCR transport. A nil

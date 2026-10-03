@@ -282,8 +282,8 @@ type DNSTTConfig struct {
 // matching the standalone udpgw implementation is used.
 type UDPGWConfig struct {
 	// Listen is the TCP address to bind for incoming udpgw clients.  Use
-	// IPv6 syntax in brackets when necessary (e.g. "[::]:7400").  If
-	// empty, the default "0.0.0.0:7400" is used.
+	// IPv6 syntax in brackets when necessary (e.g. "[::]:7300").  If
+	// empty, the default "0.0.0.0:7300" is used.
 	Listen string `json:"listen"`
 	// MaxFrame limits the maximum payload length (in bytes) of a frame sent
 	// by the client.  The default is 64*1024 (64 KiB).  Frames larger
