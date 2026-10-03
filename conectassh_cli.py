@@ -1671,7 +1671,6 @@ def ssh_menu():
         "7": ("Remover expirados", delete_expired_users),
         "8": ("Listar usuarios", list_users),
         "9": ("Restablecer tráfico", reset_traffic),
-        "10": ("Modos de conexión", connection_menu),
     }, two_columns=True)
 
 
