@@ -67,8 +67,16 @@ def colorize_menu(lines):
         if "[01]" in raw or "[02]" in raw or "[03]" in raw or "[04]" in raw or "[05]" in raw or "[06]" in raw or "[07]" in raw or "[08]" in raw or "[09]" in raw or "[10]" in raw or "[11]" in raw or "[12]" in raw or "[13]" in raw or "[14]" in raw or "[15]" in raw or "[16]" in raw or "[17]" in raw or "[18]" in raw or "[19]" in raw or "[20]" in raw or "[21]" in raw or "[22]" in raw or "[23]" in raw or "[24]" in raw or "[25]" in raw:
             # Números y etiquetas: cian + amarillo, manteniendo el layout original.
             import re
-            colored = re.sub(r"(\[\d{2}\])", lambda m: paint(m.group(1), CYAN, True), raw)
-            colored = re.sub(r"(•\s*)([^│]+)", lambda m: m.group(1) + paint(m.group(2), YELLOW), colored)
+            # Colorea CADA columna por separado. El patrón anterior tomaba
+            # solamente el texto hasta el primer borde vertical.
+            def paint_entry(match):
+                number, bullet, label = match.groups()
+                return paint(number, CYAN, True) + bullet + paint(label, YELLOW)
+            colored = re.sub(
+                r"(\[\d{2}\])(\s*•\s*)(.*?)(?=\s{3,}\[\d{2}\]|\s*│|$)",
+                paint_entry,
+                raw,
+            )
             out.append(colored)
             continue
         if "Onlines:" in raw or "Expirados:" in raw or "Total:" in raw:
