@@ -1450,7 +1450,7 @@ def render_menu(title, options, vps_status=None, columns=None):
     # especialmente en celulares. El ancho se adapta al terminal y cada opción ocupa
     # una línea completa del cuadro.
     for key, (label, _) in options.items():
-        lines.append(single(f"[{str(key).zfill(2)}] • {label}"))
+        lines.append(single(f"[{str(key).zfill(2)}] • {str(label).upper()}"))
 
     # Todos los menús y submenús tienen una salida uniforme en [00].
     lines.append(single("[00] • SALIR"))
