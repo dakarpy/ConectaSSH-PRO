@@ -48,7 +48,7 @@ def paint(text, color, bold=False):
 
 
 def colorize_menu(lines):
-    """Tema completo: marco cyan, encabezado con etiquetas cyan/valores verdes y menú por columnas."""
+    """Tema final: cyan estructura, blanco información, amarillo funciones y verde solo estados OK."""
     import re
     out = []
     header_labels = r"(Host:|SO:|Uptime:|Hora:|CPU:|Memoria:|UP/DOWN:|SERVICIO:)"
@@ -72,11 +72,18 @@ def colorize_menu(lines):
             out.append(paint(raw, CYAN, True))
             continue
 
-        # Encabezado/estado del VPS: etiquetas cyan y valores verdes.
+        # Encabezado VPS: estructura/etiquetas cyan; datos normales blancos;
+        # solamente un estado positivo como ACTIVO queda verde.
         if any(label in raw for label in ("Host:", "SO:", "Uptime:", "Hora:", "CPU:", "Memoria:", "UP/DOWN:", "SERVICIO:")):
-            colored = re.sub(header_labels, lambda m: paint(m.group(1), CYAN, True), raw)
-            # Colorea solamente los valores después de cada etiqueta, sin tocar el borde.
-            colored = re.sub(r"(: )([^│]+?)(?=\s{2,}•|\s*│|$)", lambda m: ": " + paint(m.group(2), GREEN), colored)
+            def header_entry(match):
+                bullet, label, value = match.groups()
+                state_color = GREEN if label == "SERVICIO" and value.strip().upper() in ("ACTIVO", "ONLINE", "OK") else WHITE
+                return paint(bullet, CYAN) + paint(label + ":", CYAN, True) + " " + paint(value, state_color)
+            colored = re.sub(
+                r"(•\s*)(Host|SO|Uptime|Hora|CPU|Memoria|UP/DOWN|SERVICIO):\s*([^│]+?)(?=\s{2,}•|\s*│|$)",
+                header_entry,
+                raw,
+            )
             out.append(colored)
             continue
 
