@@ -479,12 +479,11 @@ def create_user(default_days=30, test_hours=None):
             expira = dt.datetime.fromisoformat(expira).strftime("%d/%m/%Y")
         except ValueError:
             pass
-    print("\n[✓] CRIADO COM SUCESSO !")
+    print("\n[✓] ¡USUARIO CREADO CON ÉXITO!")
     print(f"USUARIO: {name}")
-    print(f"SENHA: {password}")
+    print(f"CONTRASEÑA: {password}")
     print(f"LIMITE: {p["max_connections"]}")
     print(f"EXPIRA EM: {expira}")
-    print("[Enter] para continuar")
 
 
 def edit_user():
