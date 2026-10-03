@@ -1715,7 +1715,7 @@ def ssh_menu():
         "7": ("Remover expirados", delete_expired_users),
         "8": ("Listar usuarios", list_users),
         "9": ("Restablecer tráfico", reset_traffic),
-        "10": (f"AUTENTICACIÓN PAM: {pam_state}", pam_auth_menu),
+        "10": (f"PAM: {pam_state}", pam_auth_menu),
     }, two_columns=True)
 
 
