@@ -268,7 +268,7 @@ func startOfficialHCR(cfg *HCRConfig) error {
 	}
 	target := strings.TrimSpace(cfg.Target)
 	if target == "" {
-		target = "127.0.0.1:22"
+		target = "127.0.0.1:2222"
 	}
 	args := []string{"-listen", addrs[0], "-target", target, "-transport", transport}
 	if cfg.TLSCert != "" {

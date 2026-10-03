@@ -863,7 +863,7 @@ BLOCKS = {
         ("disable_console_log", "Silenciar registros de consola", "bool"), ("log_connections", "Registrar conexiones", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
     )),
-    "hcr": ("HCR", {"engine": "official", "listen": ["0.0.0.0:8880"], "shared_ports": False, "transport": "plain", "target": "127.0.0.1:22"}, (
+    "hcr": ("HCR", {"engine": "official", "listen": ["0.0.0.0:8880"], "shared_ports": False, "transport": "plain", "target": "127.0.0.1:2222"}, (
         ("listen", "Puerto HCR", "list"), ("engine", "Motor HCR", "choose:official/embedded"), ("transport", "Transporte HCR", "choose:plain/tls/auto"), ("target", "Destino SSH HCR", "text"), ("binary_path", "Binario HCR oficial", "text"), ("shared_ports", "Compartir puertos SSH/TLS", "bool"),
         ("max_connections", "Máximo de conexiones", "int"), ("max_sessions", "Máximo de sesiones", "int"),
         ("max_source_sessions", "Máximo de sesiones por IP", "int"),
