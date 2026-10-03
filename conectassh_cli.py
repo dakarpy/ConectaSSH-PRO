@@ -1429,9 +1429,22 @@ def connection_protocols_visual():
             return ("[" + mark(enabled) + "] " + name + ": " + value)
         left = fmt(blocks[i])
         right = fmt(blocks[i + 1]) if i + 1 < len(blocks) else ""
-        gap = 3; half = (width - gap) // 2
-        row_text = "┃" + left[:half].ljust(half) + " " * gap + right[:width-half-gap].ljust(width-half-gap) + "┃"
-        print(paint(row_text, GREEN if "◉" in row_text else RED))
+        gap = 3
+        half = (width - gap) // 2
+        right_width = width - half - gap
+
+        # En terminales móviles algunas etiquetas + endpoint no caben en una sola
+        # celda. En vez de cortar, hacemos wrap dentro de cada columna.
+        import textwrap
+        left_lines = textwrap.wrap(left, width=half, break_long_words=False, break_on_hyphens=False) or [""]
+        right_lines = textwrap.wrap(right, width=right_width, break_long_words=False, break_on_hyphens=False) or [""]
+        rows = max(len(left_lines), len(right_lines))
+        for n in range(rows):
+            lpart = left_lines[n] if n < len(left_lines) else ""
+            rpart = right_lines[n] if n < len(right_lines) else ""
+            row_text = "┃" + lpart.ljust(half) + " " * gap + rpart.ljust(right_width) + "┃"
+            enabled_row = ("◉" in lpart) or ("◉" in rpart)
+            print(paint(row_text, GREEN if enabled_row else RED))
     print(paint("┣" + "━" * width + "┫", CYAN))
     print(paint("┃ [00] • RETORNAR".ljust(width + 1) + "┃", RED, True))
     print(paint("┗" + "━" * width + "┛", CYAN))
