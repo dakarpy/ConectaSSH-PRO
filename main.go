@@ -1727,6 +1727,8 @@ func startAdminAPI(store *Store, addr string) {
 
 	// SSH user management (session required; role-filtered inside handlers)
 	mux.Handle("/api/users", sessionMiddleware(http.HandlerFunc(handleListUsers)))
+	mux.Handle("/api/users/backup", sessionMiddleware(http.HandlerFunc(handleBackupUsers(store))))
+	mux.Handle("/api/users/restore", sessionMiddleware(http.HandlerFunc(handleRestoreUsers(store))))
 	mux.Handle("/api/users/create", sessionMiddleware(http.HandlerFunc(handleCreateUser(store))))
 	mux.Handle("/api/users/reset-traffic", sessionMiddleware(http.HandlerFunc(handleResetUserTraffic(store))))
 	mux.Handle("/api/users/delete", sessionMiddleware(http.HandlerFunc(handleDeleteUser(store))))
@@ -1848,6 +1850,84 @@ type UserDTO struct {
 	TOTPEnabled         bool    `json:"totp_enabled"`
 	OwnerUsername       string  `json:"owner_username,omitempty"`
 	ServerID            string  `json:"server_id,omitempty"`
+}
+
+type SSHUsersBackup struct {
+	Version   int          `json:"version"`
+	CreatedAt string       `json:"created_at"`
+	Users     []UserConfig `json:"users"`
+}
+
+func handleBackupUsers(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if store == nil {
+			http.Error(w, "database not configured", http.StatusServiceUnavailable)
+			return
+		}
+		users, err := store.LoadUsers(r.Context())
+		if err != nil {
+			http.Error(w, "failed to load users: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sess := sessionFromCtx(r.Context())
+		backup := SSHUsersBackup{Version: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339), Users: make([]UserConfig, 0, len(users))}
+		for _, state := range users {
+			if state == nil {
+				continue
+			}
+			if sess != nil && sess.Role == RoleReseller && state.Cfg.OwnerUsername != sess.Username {
+				continue
+			}
+			backup.Users = append(backup.Users, state.Cfg)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(backup)
+	}
+}
+
+func handleRestoreUsers(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if store == nil {
+			http.Error(w, "database not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var backup SSHUsersBackup
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&backup); err != nil {
+			http.Error(w, "invalid backup JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if backup.Version != 1 {
+			http.Error(w, "unsupported backup version", http.StatusBadRequest)
+			return
+		}
+		sess := sessionFromCtx(r.Context())
+		restored := 0
+		for _, u := range backup.Users {
+			u.Username = strings.TrimSpace(strings.ToLower(u.Username))
+			if u.Username == "" || u.Password == "" {
+				continue
+			}
+			if sess != nil && sess.Role == RoleReseller {
+				u.OwnerUsername = sess.Username
+			}
+			if err := store.UpsertUser(r.Context(), u); err != nil {
+				http.Error(w, "failed to restore user "+u.Username+": "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			restored++
+		}
+		reloadUsersFromDB(r.Context(), store)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"restored": restored, "total": len(backup.Users)})
+	}
 }
 
 func handleListUsers(w http.ResponseWriter, r *http.Request) {

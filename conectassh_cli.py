@@ -1344,7 +1344,7 @@ def xray_inbound_settings_menu():
                                          lambda tag=item.get("tag"): xray_inbound_settings(tag))
                        for index, item in enumerate(inbounds)})
         return result
-    menu("ENTRADAS XRAY", options)
+    menu("ENTRADAS XRAY", options, force_single=True, force_one_page=True)
 
 
 def xray_settings_menu():
@@ -1410,7 +1410,7 @@ def bot_settings_menu():
     menu("BOT DE TELEGRAM", {
         "1": ("Configuración del bot y pagos", lambda: field_menu("CONFIGURACIÓN DEL BOT", "/api/bot/config", BOT_FIELDS)),
         "2": ("Mensajes y enlace de la aplicación", bot_text_menu),
-    })
+    }, force_single=True, force_one_page=True)
 
 
 def managed_server_summary():
@@ -1954,15 +1954,105 @@ def xray_menu():
                   "13": ("Compartir puertos SSH/TLS (WS/XHTTP)", xray_shared_port)}, force_single=True, force_one_page=True)
 
 
+def backup_users_file_path():
+    timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return Path("/root") / f"ConectaSSH-users-backup-{timestamp}.json"
+
+
+def find_user_backups():
+    root = Path("/root")
+    if not root.is_dir():
+        return []
+    return sorted(root.glob("ConectaSSH-users-backup-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def backup_users():
+    backup = request("GET", "/api/users/backup", timeout=60)
+    if not isinstance(backup, dict) or backup.get("version") != 1:
+        raise CLIError("La API devolvió un backup incompatible")
+    target = backup_users_file_path()
+    data = json.dumps(backup, ensure_ascii=False, indent=2) + "\n"
+    target.write_text(data, encoding="utf-8")
+    os.chmod(target, 0o600)
+    print(f"\n✅ BACKUP DE USUARIOS CREADO")
+    print(f"📁 Archivo: {target}")
+    print(f"👤 Usuarios: {len(backup.get('users') or [])}")
+
+
+def restore_users_backup():
+    backups = find_user_backups()
+    valid = []
+    for path in backups:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if document.get("version") == 1 and isinstance(document.get("users"), list):
+                valid.append((path, document))
+        except (OSError, ValueError, TypeError):
+            continue
+
+    if not valid:
+        print("\nNo se encontró un backup compatible en /root.")
+        print("Formato esperado: /root/ConectaSSH-users-backup-*.json")
+        return
+
+    if len(valid) == 1:
+        path, document = valid[0]
+    else:
+        print("\nBACKUPS DISPONIBLES EN /root")
+        for i, (item, data) in enumerate(valid, 1):
+            created = data.get("created_at") or "fecha desconocida"
+            print(f"[{i:02d}] {item.name}  • {len(data.get('users') or [])} usuarios  • {created}")
+        choice = ask("Elegí el backup a restaurar", "1")
+        try:
+            path, document = valid[int(choice) - 1]
+        except (ValueError, IndexError):
+            raise CLIError("Backup inválido")
+
+    users = document.get("users") or []
+    if not users:
+        print(f"\nEl backup {path.name} no contiene usuarios.")
+        return
+    if not confirm(f"¿Restaurar {len(users)} usuarios desde {path.name}? Los existentes se actualizarán y los demás se conservarán"):
+        return
+
+    result = request("POST", "/api/users/restore", document, timeout=120) or {}
+    print("\n✅ RESTAURACIÓN COMPLETADA")
+    print(f"📁 Archivo: {path}")
+    print(f"👤 Restaurados: {result.get('restored', 0)}/{result.get('total', len(users))}")
+
+
+def user_backup_menu():
+    menu("BACKUP DE USUARIOS SSH", {
+        "1": ("Crear backup de usuarios", backup_users),
+        "2": ("Restaurar backup detectado en /root", restore_users_backup),
+    }, force_single=True, force_one_page=True)
+
+
+def multi_protocol_menu():
+    menu("MULTIPROTOCOLO", {
+        "1": ("Configurar protocolos simultáneamente", server_settings_menu),
+        "2": ("Ver protocolos activos", connection_protocols_visual),
+        "3": ("Ver puertos activos", connection_status),
+    }, force_single=True, force_one_page=True)
+
+
 def config_menu():
-    document = request("GET", "/api/server/config") or {}
-    menu("CONFIGURACIÓN", {"1": ("Configurar banner SSH", set_banner),
-                           "2": ("Cambiar puertos de escucha SSH", set_ssh_ports),
-                           "3": ("Ancho de banda / límites de conexiones", set_ssh_limits),
-                           "5": ("Todas las opciones del servidor y protocolos", server_settings_menu),
-                           "6": ("Configuración de Xray", xray_settings_menu),
-                           "7": ("Configuración del bot de Telegram", bot_settings_menu),
-                           "8": ("Servidores administrados", managed_servers_menu)})
+    menu("CONFIGURACIÓN", {
+        "1": ("Configurar banner SSH", set_banner),
+        "2": ("Cambiar puertos de escucha SSH", set_ssh_ports),
+        "3": ("Ancho de banda / límites de conexiones", set_ssh_limits),
+        "4": ("MULTIPROTOCOLO", multi_protocol_menu),
+        "5": ("BACKUP Y RESTAURAR USUARIOS", user_backup_menu),
+        "6": ("Configuración de Xray", xray_settings_menu),
+        "7": ("Configuración del bot de Telegram", bot_settings_menu),
+        "8": ("Servidores administrados", managed_servers_menu),
+        "9": ("Contraseña de API", api_menu),
+        "10": ("Registros recientes", logs),
+        "11": ("Reiniciar servicio", lambda: service_action("restart")),
+        "12": ("Actualizar desde Git", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
+        "13": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "14": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
+    }, force_single=True, force_one_page=True)
 
 
 def api_menu():
@@ -1991,14 +2081,8 @@ def main_menu_options():
         "2": ("GESTOR XRAY", xray_menu),
         "3": ("GESTIONAR PROTOCOLOS", connection_menu),
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
-        "5": ("VPS Y TRÁFICO", observability_menu),
+        "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("CONFIGURACIÓN", config_menu),
-        "7": ("CONTRASEÑA DE API", api_menu),
-        "8": ("REGISTROS RECIENTES", logs),
-        "9": ("REINICIAR SERVICIO", lambda: service_action("restart")),
-        "10": ("ACTUALIZAR DESDE GIT", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
-        "11": ("CHECKUSER DUAL", checkuser_dual_menu),
-        "12": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
     }
 
 
