@@ -1954,68 +1954,115 @@ def xray_menu():
                   "13": ("Compartir puertos SSH/TLS (WS/XHTTP)", xray_shared_port)}, force_single=True, force_one_page=True)
 
 
+
 def backup_users_file_path():
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    return Path("/root") / f"ConectaSSH-users-backup-{timestamp}.vps"
+    return Path("/root") / f"ConectaSSH-backup-{timestamp}.json"
 
 
 def find_user_backups():
-    root=Path("/root")
-    return sorted(list(root.glob("ConectaSSH-users-backup-*.vps"))+list(root.glob("ConectaSSH-users-backup-*.json")),
-                  key=lambda p:p.stat().st_mtime, reverse=True) if root.is_dir() else []
+    root = Path("/root")
+    if not root.is_dir():
+        return []
+    paths = list(root.glob("ConectaSSH-backup-*.json"))
+    paths += list(root.glob("ConectaSSH-users-backup-*.vps"))
+    return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def backup_users():
     require_root()
-    script="/opt/sshpanel/sshplus_backup.py"
-    result=subprocess.run(["python3",script],capture_output=True,text=True,timeout=300)
-    if result.returncode!=0:
-        raise CLIError(result.stderr.strip() or "No se pudo crear el backup .vps")
-    print("\n"+result.stdout.strip())
+    users = (request("GET", "/api/users/backup", timeout=120) or {}).get("users") or []
+    xray = request("GET", "/api/xray/config", timeout=60) or {}
+    document = {
+        "format": "conecta-ssh-backup",
+        "version": 2,
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "ssh": {"users": users},
+        "xray": {"config": xray},
+    }
+    target = backup_users_file_path()
+    target.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(target, 0o600)
+    print("\n✅ BACKUP CONECTA SSH CREADO")
+    print(f"📁 Archivo: {target}")
+    print(f"👤 Usuarios SSH: {len(users)}")
+    print(f"✖️ Entradas Xray: {len(xray.get('inbounds') or [])}")
+    print("📦 Incluye usuarios SSH + configuración Xray")
 
 
-def restore_users_backup():
+def restore_own_backup(path):
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("format") != "conecta-ssh-backup" or document.get("version") != 2:
+        raise CLIError("El archivo no es un backup Conecta SSH v2")
+    users = (document.get("ssh") or {}).get("users") or []
+    xray = ((document.get("xray") or {}).get("config"))
+    restored = 0
+    if users:
+        result = request("POST", "/api/users/restore",
+                         {"version": 1, "created_at": document.get("created_at"), "users": users},
+                         timeout=180) or {}
+        restored = result.get("restored", 0)
+    if isinstance(xray, dict):
+        request("POST", "/api/xray/config", xray, timeout=120)
+    print("\n✅ RESTAURACIÓN CONECTA SSH COMPLETADA")
+    print(f"👤 Usuarios SSH: {restored}/{len(users)}")
+    print(f"✖️ Entradas Xray: {len((xray or {}).get('inbounds') or [])}")
+
+
+def restore_sshplus_backup(path):
+    result = subprocess.run(["python3", "/opt/sshpanel/sshplus_backup.py", "restore", str(path)],
+                            capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise CLIError(result.stderr.strip() or "No se pudo importar el backup SSHPlus")
+    print("\n" + result.stdout.strip())
+    print("🔄 Fuente: backup SSHPlus .vps")
+
+
+def _choose_backup(paths, title):
+    if not paths:
+        return None
+    if len(paths) == 1:
+        return paths[0]
+    print(f"\n{title}")
+    for i, p in enumerate(paths, 1):
+        print(f"[{i:02d}] {p.name}")
+    try:
+        return paths[int(ask("Elegí el backup", "1")) - 1]
+    except (ValueError, IndexError):
+        raise CLIError("Backup inválido")
+
+
+def restore_own_backup_menu():
     require_root()
-    backups=find_user_backups()
-    valid=[]
-    for path in backups:
-        try:
-            if path.suffix.lower()==".vps":
-                if path.stat().st_size>0:
-                    valid.append(path)
-            else:
-                data=json.loads(path.read_text(encoding="utf-8"))
-                if data.get("version")==1 and isinstance(data.get("users"),list):
-                    valid.append(path)
-        except Exception:
-            continue
-    if not valid:
-        print("\nNo se encontró un backup compatible en /root.")
-        print("Formatos: /root/ConectaSSH-users-backup-*.vps (SSHPlus) o .json (legado)")
+    paths = sorted(Path("/root").glob("ConectaSSH-backup-*.json"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    path = _choose_backup(paths, "BACKUPS CONECTA SSH")
+    if not path:
+        print("\nNo se encontró un backup Conecta SSH en /root.")
         return
-    if len(valid)==1:
-        path=valid[0]
-    else:
-        print("\nBACKUPS DISPONIBLES EN /root")
-        for i,item in enumerate(valid,1):
-            print(f"[{i:02d}] {item.name} • {item.stat().st_size} bytes")
-        try:path=valid[int(ask("Elegí el backup a restaurar","1"))-1]
-        except (ValueError,IndexError):raise CLIError("Backup inválido")
-    if not confirm(f"¿Importar/restaurar usuarios desde {path.name}? Los existentes se actualizarán y los demás se conservarán"):
-        return
-    if path.suffix.lower()==".vps":
-        result=subprocess.run(["python3","/opt/sshpanel/sshplus_backup.py","restore",str(path)],
-                              capture_output=True,text=True,timeout=300)
-        if result.returncode!=0:
-            raise CLIError(result.stderr.strip() or "No se pudo importar el backup SSHPlus")
-        print("\n"+result.stdout.strip())
-        print("🔄 Fuente: backup SSHPlus .vps")
-    else:
-        document=json.loads(path.read_text(encoding="utf-8"))
-        result=request("POST","/api/users/restore",document,timeout=180) or {}
-        print("\n✅ RESTAURACIÓN COMPLETADA")
-        print(f"👤 Restaurados: {result.get('restored',0)}/{result.get('total',len(document.get('users') or []))}")
+    if confirm(f"¿Restaurar {path.name}? Se restaurarán usuarios SSH y Xray."):
+        restore_own_backup(path)
 
+
+def restore_sshplus_from_menu():
+    require_root()
+    paths = sorted(Path("/root").glob("ConectaSSH-users-backup-*.vps"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    path = _choose_backup(paths, "BACKUPS SSHPLUS")
+    if not path:
+        print("\nNo se encontró un backup SSHPlus .vps en /root.")
+        print("Copiá el .vps de SSHPlus a /root y volvé a entrar.")
+        return
+    if confirm(f"¿Importar usuarios de SSHPlus desde {path.name}?"):
+        restore_sshplus_backup(path)
+
+
+def user_backup_menu():
+    menu("BACKUP Y RESTAURACIÓN", {
+        "1": ("Crear Backup Conecta SSH (SSH + Xray)", backup_users),
+        "2": ("Restaurar Backup Conecta SSH", restore_own_backup_menu),
+        "3": ("Restaurar Backup SSHPlus", restore_sshplus_from_menu),
+    }, force_single=True, force_one_page=True)
 
 def speedtest_vps():
     """Ejecuta Speedtest sin modificar la configuración del servidor."""
