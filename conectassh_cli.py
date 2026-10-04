@@ -2114,7 +2114,25 @@ def optimize_vps():
     before_mem = local_meminfo()[1]
     before_disk = shutil.disk_usage("/").used
 
+    def wait_for_apt_lock(timeout=90):
+        """Espera a que otro apt/dpkg termine, sin matar procesos ajenos."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            check = subprocess.run(
+                ["fuser", "/var/lib/dpkg/lock-frontend", "/var/cache/apt/archives/lock"],
+                capture_output=True,
+                text=True,
+            )
+            if check.returncode != 0:
+                return True
+            time.sleep(2)
+        return False
+
     def run_step(command, success, failure):
+        if not wait_for_apt_lock():
+            print("⚠️ APT/Dpkg sigue ocupado después de esperar 90 segundos.")
+            print(f"[!] {failure}")
+            return False
         result = subprocess.run(command, capture_output=True, text=True, timeout=180)
         if result.returncode == 0:
             print(f"[✓] {success}")
