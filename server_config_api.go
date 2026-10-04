@@ -96,11 +96,17 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 		PAMAuthEnabled            *bool            `json:"pam_auth_enabled"`
 		AutoMenu                  *bool            `json:"auto_menu"`
 		SSHConnectionLimitEnabled *bool            `json:"ssh_connection_limit_enabled"`
-		BHTTP                     *json.RawMessage `json:"bhttp"`
-		BTUN                      *json.RawMessage `json:"btun"`
-		HCR                       *json.RawMessage `json:"hcr"`
 	}
 	if err := json.Unmarshal(body, &fieldPresence); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// json.Unmarshal into *json.RawMessage cannot distinguish a missing key
+	// from an explicit JSON null: both produce nil. Service blocks use null
+	// as the deliberate "disable" value, so track key presence separately.
+	var serviceFieldPresence map[string]json.RawMessage
+	if err := json.Unmarshal(body, &serviceFieldPresence); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -131,13 +137,13 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 		if fieldPresence.SSHConnectionLimitEnabled == nil {
 			newCfg.SSHConnectionLimitEnabled = globalCfg.SSHConnectionLimitEnabled
 		}
-		if fieldPresence.BHTTP == nil {
+		if _, present := serviceFieldPresence["bhttp"]; !present {
 			newCfg.BHTTP = globalCfg.BHTTP
 		}
-		if fieldPresence.BTUN == nil {
+		if _, present := serviceFieldPresence["btun"]; !present {
 			newCfg.BTUN = globalCfg.BTUN
 		}
-		if fieldPresence.HCR == nil {
+		if _, present := serviceFieldPresence["hcr"]; !present {
 			newCfg.HCR = globalCfg.HCR
 		}
 	}

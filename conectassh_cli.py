@@ -74,7 +74,7 @@ def colorize_menu(lines):
 
         # Encabezado VPS: estructura/etiquetas cyan; datos normales blancos;
         # solamente un estado positivo como ACTIVO queda verde.
-        if any(label in raw for label in ("Host:", "SO:", "Uptime:", "Hora:", "CPU:", "RAM:", "Memoria:", "UP/DOWN:", "SERVICIO:")):
+        if re.search(r"(?:^|•\s)(Host|SO|Uptime|Hora|CPU|RAM|Memoria|UP/DOWN|SERVICIO):", raw):
             def header_entry(match):
                 bullet, label, value = match.groups()
                 state_color = GREEN if label == "SERVICIO" and value.strip().upper() in ("ACTIVO", "ONLINE", "OK") else WHITE
@@ -98,7 +98,7 @@ def colorize_menu(lines):
                 number, bullet, label = match.groups()
                 return paint(number, CYAN, True) + bullet + paint(label, YELLOW)
             colored = re.sub(
-                r"(\[\d{2}\])(\s*•\s*)(.*?)(?=\s{3,}\[\d{2}\]|\s*│|$)",
+                r"(\[\d{2}\])(\s*•\s*)(.*?)(?=\s*│|\s{3,}\[\d{2}\]|$)",
                 paint_entry,
                 raw,
             )
@@ -500,11 +500,11 @@ def create_user(default_days=30, test_hours=None):
             expira = dt.datetime.fromisoformat(expira).strftime("%d/%m/%Y")
         except ValueError:
             pass
-    print("\n[✓] ¡USUARIO CREADO CON ÉXITO!")
-    print(f"USUARIO: {name}")
-    print(f"CONTRASEÑA: {password}")
-    print(f"LIMITE: {p["max_connections"]}")
-    print(f"EXPIRA EM: {expira}")
+    print("\n✅ ¡USUARIO CREADO CON ÉXITO!")
+    print(f"👤 USUARIO: {name}")
+    print(f"🔑 CONTRASEÑA: {password}")
+    print(f"📲 CONEXIÓN: {p["max_connections"]}")
+    print(f"📆 VENCIMIENTO: {expira}")
 
 
 def edit_user():
@@ -809,9 +809,32 @@ def edit_field(path, field, parent_keys=()):
     save_settings(path, document)
 
 
+def _display_setting_value(value):
+    if isinstance(value, list):
+        return ", ".join(map(str, value)) if value else "--"
+    if isinstance(value, bool):
+        return "ACTIVO" if value else "DESACTIVADO"
+    if value is None or value == "":
+        return "--"
+    return str(value)
+
+
 def field_menu(title, path, fields, parent_keys=()):
-    menu(title, {str(index): (label, lambda f=field: edit_field(path, f, parent_keys))
-                 for index, field in enumerate(fields, 1) for label in (field[1],)})
+    def current_options():
+        document = request("GET", path) or {}
+        parent = document
+        for parent_key in parent_keys:
+            parent = parent.get(parent_key) or {}
+        result = {}
+        for index, field in enumerate(fields, 1):
+            key, label, _kind = field
+            result[str(index)] = (
+                f"{label}: {_display_setting_value(parent.get(key))}",
+                lambda f=field: edit_field(path, f, parent_keys),
+            )
+        return result
+
+    menu(title, current_options, force_single=True)
 
 
 SSH_FIELDS = (
@@ -938,12 +961,36 @@ def block_field(block, field):
 
 def block_menu(block):
     title, _, fields = BLOCKS[block]
-    options = {"1": ("Activar / desactivar", lambda: toggle_block(block))}
-    options.update({str(index): (label, lambda f=field: block_field(block, f))
-                    for index, field in enumerate(fields, 2) for label in (field[1],)})
-    if block == "xray":
-        options[str(len(fields) + 2)] = ("Ajustes del emulador nativo", xray_tuning_menu)
-    menu(title + " SETTINGS", options)
+
+    def current_options():
+        document = request("GET", "/api/server/config") or {}
+        current = document.get(block)
+        active = current is not None
+        options = {
+            "1": (
+                "ACTIVAR / DESACTIVAR: " + ("ACTIVO" if active else "DESACTIVADO"),
+                lambda: toggle_block(block),
+            )
+        }
+
+        for index, field in enumerate(fields, 2):
+            key, label, _kind = field
+            shown = _display_setting_value(current.get(key)) if active else "--"
+            options[str(index)] = (
+                f"{label}: {shown}",
+                lambda f=field: block_field(block, f),
+            )
+
+        if block == "xray":
+            options[str(len(fields) + 2)] = ("Ajustes del emulador nativo", xray_tuning_menu)
+        return options
+
+    menu(
+        title + " SETTINGS",
+        current_options,
+        force_single=(block in ("dnstt", "bhttp", "udpgw", "btun", "hcr", "xray")),
+        force_one_page=(block in ("dnstt", "btun", "hcr", "udpgw")),
+    )
 
 
 def xray_tuning_field(field):
@@ -967,7 +1014,7 @@ def xray_tuning_menu():
               ("mux_global_sessions", "Límite global de sesiones Mux", "int"),
               ("trace_packets", "Rastreo de paquetes", "bool"))
     menu("AJUSTES AVANZADOS DE XRAY", {str(i): (field[1], lambda f=field: xray_tuning_field(f))
-                         for i, field in enumerate(fields, 1)})
+                         for i, field in enumerate(fields, 1)}, force_single=True, force_one_page=True)
 
 
 def certificate_list():
@@ -1011,7 +1058,7 @@ def tls_listener_edit(index):
                "2": ("Seleccionar certificado", lambda: tls_listener_field(index, "certificate")),
                "3": ("Eliminar escucha", lambda: tls_listener_field(index, "remove"))}
     print_wrapped(f"Escucha: {entry['listen']}  Certificado: {entry['cert_file']}")
-    menu("ESCUCHA TLS", options)
+    menu("ESCUCHA TLS", options, force_single=True)
 
 
 def tls_listener_field(index, field):
@@ -1041,11 +1088,11 @@ def tls_listener_menu():
                                          lambda i=index: tls_listener_edit(i))
                        for index, listener in enumerate(listeners)})
         return result
-    menu("ESCUCHAS TLS", options)
+    menu("ESCUCHAS TLS", options, force_single=True)
 
 
 def server_settings_menu():
-    menu("CONFIGURACIÓN DEL SERVIDOR", {
+    options = {
         "1": ("WEBSOCKET", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
         "2": ("TLS TUNNEL", tls_listener_menu),
         "3": ("DNSTT", lambda: block_menu("dnstt")),
@@ -1053,8 +1100,105 @@ def server_settings_menu():
         "5": ("BTUN", lambda: block_menu("btun")),
         "6": ("HCR", lambda: block_menu("hcr")),
         "7": ("UDPGW", lambda: block_menu("udpgw")),
-        "8": ("Servicio Xray", lambda: block_menu("xray")),
-    })
+        "8": ("SERVICIO XRAY", lambda: block_menu("xray")),
+    }
+
+    while True:
+        clear_screen()
+        cfg = request("GET", "/api/server/config") or {}
+
+        def compact_endpoint(value):
+            import re
+            return re.sub(r"0\.0\.0\.0:(\d+)", r":\1", str(value))
+
+        width = 76
+        inner = 76
+        gap = 3
+        half = (inner - gap) // 2
+        right_width = inner - half - gap
+
+        # Una sola caja: mantiene todas las funciones y solo unifica el diseño.
+        print(paint("┏" + "━" * width + "┓", CYAN))
+        print(paint("┃" + " MODOS DE CONEXIÓN ".center(inner) + "┃", CYAN, True))
+        print(paint("┣" + "━" * width + "┫", CYAN))
+
+        listen = cfg.get("listen") or "--"
+        extra = cfg.get("extra_listen") or []
+        tls = cfg.get("tls_forwarders") or []
+        blocks = [
+            ("OPENSSH", listen, True),
+            ("SSH/HTTP PÚBLICO", ", ".join([listen, *extra]), True),
+            ("TLS SSH", ", ".join(x.get("listen", "--") for x in tls) or "--", bool(tls)),
+            ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
+            ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
+            ("BTUN", "TCP " + str((cfg.get("btun") or {}).get("tcp_listen", "--")) + " / UDP " + str((cfg.get("btun") or {}).get("udp_listen", "--")), cfg.get("btun") is not None),
+            ("DNSTT", str((cfg.get("dnstt") or {}).get("domain", "--")) + " / " + str((cfg.get("dnstt") or {}).get("udp_listen", "--")), cfg.get("dnstt") is not None),
+            ("UDPGW", str((cfg.get("udpgw") or {}).get("listen", "--")), cfg.get("udpgw") is not None),
+            ("XRAY", str((cfg.get("xray") or {}).get("mode", "--")), bool(cfg.get("xray") and cfg["xray"].get("enabled", True))),
+        ]
+
+        for i in range(0, len(blocks), 2):
+            def paint_protocol(item):
+                name, value, enabled = item
+                marker = "◉" if enabled else "○"
+                marker_color = GREEN if enabled else RED
+                return (paint("[", CYAN) + paint(marker, marker_color, True) +
+                        paint("] ", CYAN) + paint(name, WHITE) +
+                        paint(": " + compact_endpoint(value), WHITE))
+
+            left_plain = f"[{'◉' if blocks[i][2] else '○'}] {blocks[i][0]}: {compact_endpoint(blocks[i][1])}"
+            left_colored = paint_protocol(blocks[i])
+
+            if i + 1 < len(blocks):
+                right_plain = f"[{'◉' if blocks[i + 1][2] else '○'}] {blocks[i + 1][0]}: {compact_endpoint(blocks[i + 1][1])}"
+                right_colored = paint_protocol(blocks[i + 1])
+            else:
+                right_plain = ""
+                right_colored = ""
+
+            left_colored += " " * max(0, half - len(left_plain))
+            right_colored += " " * max(0, right_width - len(right_plain))
+            print("┃" + left_colored + " " * gap + right_colored + "┃")
+
+        print(paint("┣" + "━" * width + "┫", CYAN))
+        print(paint("┃" + " CONFIGURACIÓN DEL SERVIDOR ".center(inner) + "┃", CYAN, True))
+        print(paint("┣" + "━" * width + "┫", CYAN))
+
+        config_entries = [
+            ("01", "WEBSOCKET"), ("02", "TLS TUNNEL"),
+            ("03", "DNSTT"), ("04", "BHTTP"),
+            ("05", "BTUN"), ("06", "HCR"),
+            ("07", "UDPGW"), ("08", "SERVICIO XRAY"),
+        ]
+        for i in range(0, len(config_entries), 2):
+            left_num, left_label = config_entries[i]
+            right_num, right_label = config_entries[i + 1]
+            left_text = f"[{left_num}] • {left_label}"
+            right_text = f"[{right_num}] • {right_label}"
+            left_colored = paint(f"[{left_num}]", CYAN, True) + paint(" • ", YELLOW) + paint(left_label, YELLOW)
+            right_colored = paint(f"[{right_num}]", CYAN, True) + paint(" • ", YELLOW) + paint(right_label, YELLOW)
+            left_colored += " " * max(0, half - len(left_text))
+            right_colored += " " * max(0, right_width - len(right_text))
+            print("┃" + left_colored + " " * gap + right_colored + "┃")
+
+        exit_text = "[00] • SALIR"
+        exit_colored = paint("[00]", RED, True) + paint(" • SALIR", RED)
+        print("┃" + exit_colored + " " * max(0, inner - len(exit_text)) + "┃")
+        print(paint("┗" + "━" * width + "┛", CYAN))
+
+        choice = input(paint("INFORME UMA OPÇÃO: ", CYAN, True)).strip().lstrip("0") or "0"
+        if choice == "0":
+            return
+        entry = options.get(choice)
+        if not entry:
+            print("Opción inválida.")
+            continue
+        try:
+            entry[1]()
+        except (CLIError, ValueError, json.JSONDecodeError, OSError) as exc:
+            print("Error:", exc)
+        except KeyboardInterrupt:
+            print("\nCancelado.")
 
 
 def tree_node(document, trail):
@@ -1103,7 +1247,7 @@ def tree_browse(path, trail=()):
             result[str(index)] = (label, lambda t=next_trail, v=value:
                                   tree_browse(path, t) if isinstance(v, (dict, list)) else tree_value(path, t))
         return result
-    menu("XRAY " + (str(trail[-1]).upper() if trail else "FIELDS"), options)
+    menu("XRAY " + (str(trail[-1]).upper() if trail else "FIELDS"), options, force_single=True)
 
 
 def xray_inbound_add():
@@ -1188,7 +1332,7 @@ def xray_inbound_settings(tag):
         "3": ("Transporte (TCP/WS/XHTTP)", lambda: xray_inbound_field(tag, "transport")),
         "4": ("Ruta WS/XHTTP", lambda: xray_inbound_field(tag, "path")),
         "5": ("Eliminar entrada", lambda: xray_inbound_field(tag, "remove")),
-    })
+    }, force_single=True)
 
 
 def xray_inbound_settings_menu():
@@ -1259,7 +1403,7 @@ def bot_text_menu():
     fields = (("welcome_text", "Mensaje de bienvenida"), ("contact_text", "Mensaje de contacto"),
               ("app_text", "Descripción de la aplicación"), ("app_url", "URL de la aplicación"))
     menu("TEXTOS DEL BOT", {str(i): (label, lambda k=key, l=label: bot_text_setting(k, l))
-                      for i, (key, label) in enumerate(fields, 1)})
+                      for i, (key, label) in enumerate(fields, 1)}, force_single=True, force_one_page=True)
 
 
 def bot_settings_menu():
@@ -1302,7 +1446,7 @@ def managed_server_edit(server_id):
               ("admin_username", "Usuario administrador remoto"), ("is_active", "Activo"),
               ("enable_ssh", "Permitir cuentas SSH"), ("enable_xray", "Permitir clientes Xray"))
     menu("SERVIDOR ADMINISTRADO", {str(i): (label, lambda f=field: managed_server_field(server_id, f))
-                            for i, (field, label) in enumerate(fields, 1)})
+                            for i, (field, label) in enumerate(fields, 1)}, force_single=True, force_one_page=True)
 
 
 def managed_servers_menu():
@@ -1434,7 +1578,7 @@ def regenerate_dnstt_key():
         print(json.dumps(request("POST", "/api/dnstt/genkey", {}), indent=2))
 
 
-def connection_protocols_visual():
+def connection_protocols_visual(show_return=True):
     cfg = request("GET", "/api/server/config") or {}
     def mark(enabled): return "◉" if enabled else "○"
     listen = cfg.get("listen") or "--"
@@ -1451,7 +1595,8 @@ def connection_protocols_visual():
         ("UDPGW", str((cfg.get("udpgw") or {}).get("listen", "--")), cfg.get("udpgw") is not None),
         ("XRAY", str((cfg.get("xray") or {}).get("mode", "--")), bool(cfg.get("xray") and cfg["xray"].get("enabled", True))),
     ]
-    width = min(74, max(40, terminal_columns() - 4))
+    # Ancho fijo común: garantiza que el segundo panel se alinee con el primero.
+    width = 76
     print(paint("┏" + "━" * width + "┓", CYAN))
     print(paint("┃" + " MODOS DE CONEXIÓN ".center(width) + "┃", CYAN, True))
     print(paint("┣" + "━" * width + "┫", CYAN))
@@ -1478,11 +1623,32 @@ def connection_protocols_visual():
         left = left[:half].rstrip()
         right = right[:right_width].rstrip()
         row_text = "┃" + left.ljust(half) + " " * gap + right.ljust(right_width) + "┃"
-        enabled_row = ("◉" in left) or ("◉" in right)
-        print(paint(row_text, GREEN if enabled_row else RED))
-    print(paint("┣" + "━" * width + "┫", CYAN))
-    print(paint("┃ [00] • RETORNAR".ljust(width + 1) + "┃", RED, True))
-    print(paint("┗" + "━" * width + "┛", CYAN))
+
+        # Tema profesional: marco/estructura cyan, protocolo y puerto blanco,
+        # estado activo verde e inactivo rojo.
+        def paint_protocol(item):
+            name, value, enabled = item
+            marker = "◉" if enabled else "○"
+            marker_color = GREEN if enabled else RED
+            name_part = paint("[", CYAN) + paint(marker, marker_color, True) + paint("] ", CYAN)
+            name_part += paint(name, WHITE)
+            value_text = compact_endpoint(value)
+            return name_part + paint(": " + value_text, WHITE)
+
+        left_colored = paint_protocol(blocks[i])
+        right_colored = paint_protocol(blocks[i + 1]) if i + 1 < len(blocks) else ""
+        # El ancho se conserva usando el texto plano para evitar desalineación ANSI.
+        left_plain = left
+        right_plain = right
+        left_colored += " " * max(0, half - len(left_plain))
+        right_colored += " " * max(0, right_width - len(right_plain))
+        print("┃" + left_colored + " " * gap + right_colored + "┃")
+    if show_return:
+        print(paint("┣" + "━" * width + "┫", CYAN))
+        print(paint("┃ [00] • RETORNAR".ljust(width + 1) + "┃", RED, True))
+        print(paint("┗" + "━" * width + "┛", CYAN))
+    else:
+        print(paint("┗" + "━" * width + "┛", CYAN))
 
 def connection_menu():
     menu("MODOS DE CONEXIÓN", {
@@ -1662,7 +1828,7 @@ def clear_screen():
 _menu_calls = 0
 
 
-def menu(title, options, two_columns=False):
+def menu(title, options, two_columns=False, force_single=False, force_one_page=False):
     global _menu_calls
     _menu_calls += 1
     page = 0
@@ -1673,8 +1839,8 @@ def menu(title, options, two_columns=False):
         # Dos columnas en terminales normales cuando las etiquetas caben; una columna en móvil.
         labels = [str(label) for label, _ in current_options.values()]
         half = max(1, (terminal_columns() - 8) // 2)
-        auto_two_columns = terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels)
-        page_size = 16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12)
+        auto_two_columns = False if force_single else (terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels))
+        page_size = len(current_options) if force_one_page else (16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12))
         entries = list(current_options.items())
         pages = max(1, (len(entries) + page_size - 1) // page_size)
         page = min(page, pages - 1)
@@ -1762,7 +1928,7 @@ def ssh_menu():
         "7": ("Remover expirados", delete_expired_users),
         "8": ("Listar usuarios", list_users),
         "9": ("Restablecer tráfico", reset_traffic),
-        "10": (f"PAM: {pam_state}", pam_auth_menu),
+        "10": (f"USUARIO PAM: {pam_state}", pam_auth_menu),
         "11": (f"LIMITAR SSH: {limit_state}", ssh_connection_limit_toggle),
     }, two_columns=True)
 
@@ -1785,7 +1951,7 @@ def xray_menu():
                   "10": ("Reiniciar Xray", lambda: xray_action("restart")),
                   "11": ("Registros de Xray", lambda: print(json.dumps(request("GET", "/api/xray/logs"), indent=2)[-8000:])),
                   "12": ("Reparar estadísticas de Xray", lambda: request("POST", "/api/xray/stats/repair", {}) if confirm("¿Reparar las estadísticas de Xray?") else None),
-                  "13": ("Compartir puertos SSH/TLS (WS/XHTTP)", xray_shared_port)})
+                  "13": ("Compartir puertos SSH/TLS (WS/XHTTP)", xray_shared_port)}, force_single=True, force_one_page=True)
 
 
 def config_menu():
@@ -1823,8 +1989,8 @@ def main_menu_options():
     return {
         "1": ("GESTOR DE USUARIOS SSH", ssh_menu),
         "2": ("GESTOR XRAY", xray_menu),
-        "3": ("MODOS DE CONEXIÓN", connection_menu),
-        "4": ("PROTOCOLOS DE CONEXIÓN", server_settings_menu),
+        "3": ("GESTIONAR PROTOCOLOS", connection_menu),
+        "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("VPS Y TRÁFICO", observability_menu),
         "6": ("CONFIGURACIÓN", config_menu),
         "7": ("CONTRASEÑA DE API", api_menu),
