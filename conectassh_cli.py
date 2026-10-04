@@ -1804,13 +1804,14 @@ def main_menu_options():
         "1": ("GESTOR DE USUARIOS SSH", ssh_menu),
         "2": ("GESTOR XRAY", xray_menu),
         "3": ("MODOS DE CONEXIÓN", connection_menu),
-        "4": ("VPS Y TRÁFICO", observability_menu),
-        "5": ("CONFIGURACIÓN", config_menu),
-        "6": ("CONTRASEÑA DE API", api_menu),
-        "7": ("REGISTROS RECIENTES", logs),
-        "8": ("REINICIAR SERVICIO", lambda: service_action("restart")),
-        "9": ("ACTUALIZAR DESDE GIT", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
-        "10": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "4": ("PROTOCOLOS DE CONEXIÓN", server_settings_menu),
+        "5": ("VPS Y TRÁFICO", observability_menu),
+        "6": ("CONFIGURACIÓN", config_menu),
+        "7": ("CONTRASEÑA DE API", api_menu),
+        "8": ("REGISTROS RECIENTES", logs),
+        "9": ("REINICIAR SERVICIO", lambda: service_action("restart")),
+        "10": ("ACTUALIZAR DESDE GIT", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
+        "11": ("CHECKUSER DUAL", checkuser_dual_menu),
     }
 
 
