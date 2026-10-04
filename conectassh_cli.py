@@ -1833,6 +1833,7 @@ def main_menu_options():
         "9": ("REINICIAR SERVICIO", lambda: service_action("restart")),
         "10": ("ACTUALIZAR DESDE GIT", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
         "11": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "12": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
     }
 
 
