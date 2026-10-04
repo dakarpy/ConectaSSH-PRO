@@ -2021,6 +2021,57 @@ def restore_users_backup():
     print(f"👤 Restaurados: {result.get('restored', 0)}/{result.get('total', len(users))}")
 
 
+def speedtest_vps():
+    """Ejecuta Speedtest sin modificar la configuración del servidor."""
+    require_root()
+    binary = shutil.which("speedtest-cli")
+    if not binary:
+        raise CLIError("speedtest-cli no está instalado")
+    print("\n🌐 SPEEDTEST")
+    print("Buscando el mejor servidor y realizando la prueba...")
+    result = subprocess.run([binary, "--simple"], capture_output=True, text=True, timeout=180)
+    output = (result.stdout or result.stderr).strip()
+    if result.returncode != 0:
+        raise CLIError(output or "Speedtest no pudo completarse")
+    print("\n" + output)
+
+
+def optimize_vps():
+    """Limpieza segura del VPS: no mata procesos ni reinicia servicios."""
+    require_root()
+    before_mem = local_meminfo()[1]
+    before_disk = shutil.disk_usage("/").used
+    print("\n⚡ OPTIMIZACIÓN SEGURA DEL VPS")
+    print("No se detendrán procesos ni se reiniciarán servicios.")
+
+    for command, label in (
+        (["apt-get", "clean"], "Limpiando caché de APT"),
+        (["apt-get", "autoremove", "-y"], "Eliminando paquetes no utilizados"),
+    ):
+        print(f"\n• {label}...")
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            print_wrapped("⚠️ " + (result.stderr.strip() or "La operación no pudo completarse."))
+
+    print("\n• Limpiando temporales seguros...")
+    subprocess.run(["systemd-tmpfiles", "--clean"], capture_output=True, text=True, check=False)
+
+    print("• Liberando cachés del filesystem...")
+    try:
+        with open("/proc/sys/vm/drop_caches", "w", encoding="ascii") as handle:
+            handle.write("3\n")
+    except OSError as exc:
+        print_wrapped("⚠️ No se pudieron liberar las cachés del kernel: " + str(exc))
+
+    after_mem = local_meminfo()[1]
+    after_disk = shutil.disk_usage("/").used
+    print("\n✅ OPTIMIZACIÓN COMPLETADA")
+    print(f"💾 Disco liberado: {size(max(0, before_disk - after_disk))}")
+    print(f"🧠 RAM usada antes: {size(before_mem)}")
+    print(f"🧠 RAM usada después: {size(after_mem)}")
+    print("🔒 Procesos y servicios: sin detener ni reiniciar")
+
+
 def user_backup_menu():
     menu("BACKUP DE USUARIOS SSH", {
         "1": ("Crear Backup de usuarios", backup_users),
@@ -2082,7 +2133,9 @@ def main_menu_options():
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
         "7": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
-        "8": ("CONFIGURACIÓN", config_menu),
+        "8": ("SPEEDTEST", speedtest_vps),
+        "9": ("OPTIMIZAR", optimize_vps),
+        "10": ("CONFIGURACIÓN", config_menu),
     }
 
 
