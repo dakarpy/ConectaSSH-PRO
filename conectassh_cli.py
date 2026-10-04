@@ -2065,18 +2065,47 @@ def user_backup_menu():
     }, force_single=True, force_one_page=True)
 
 def speedtest_vps():
-    """Ejecuta Speedtest sin modificar la configuración del servidor."""
+    """Ejecuta Speedtest y muestra un resultado limpio en español."""
     require_root()
-    binary = shutil.which("speedtest-cli")
+    binary = shutil.which("speedtest-cli") or shutil.which("speedtest")
     if not binary:
-        raise CLIError("speedtest-cli no está instalado")
-    print("\n🌐 SPEEDTEST")
-    print("Buscando el mejor servidor y realizando la prueba...")
-    result = subprocess.run([binary, "--simple"], capture_output=True, text=True, timeout=180)
-    output = (result.stdout or result.stderr).strip()
-    if result.returncode != 0:
-        raise CLIError(output or "Speedtest no pudo completarse")
-    print("\n" + output)
+        raise CLIError("Speedtest no está instalado")
+
+    print("\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┃             TEST DE VELOCIDAD DEL VPS            ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("[===  ] • ESPERE - EJECUTANDO PRUEBA")
+
+    result = subprocess.run(
+        [binary, "--json", "--share"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    output = (result.stdout or "").strip()
+    if result.returncode != 0 or not output:
+        error = (result.stderr or output).strip()
+        raise CLIError(error or "Speedtest no pudo completarse")
+
+    try:
+        data = json.loads(output)
+        ping = float(data.get("ping", 0.0))
+        download = float(data.get("download", 0.0)) / 1_000_000
+        upload = float(data.get("upload", 0.0)) / 1_000_000
+        share = str(data.get("share") or "").strip()
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise CLIError("Respuesta inválida del Speedtest: " + str(exc))
+
+    if not share:
+        share = "No disponible"
+
+    print("\n[✓] PRUEBA DE VELOCIDAD FINALIZADA")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"PING: {ping:.2f} ms")
+    print(f"DESCARGA: {download:.2f} Mbps")
+    print(f"SUBIDA: {upload:.2f} Mbps")
+    print(f"ENLACE: {share}")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 
 def optimize_vps():
