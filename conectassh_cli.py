@@ -1046,7 +1046,7 @@ def tls_listener_menu():
 
 def server_settings_menu():
     menu("CONFIGURACIÓN DEL SERVIDOR", {
-        "1": ("WEBSOCKET / SSH", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
+        "1": ("WEBSOCKET", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
         "2": ("TLS TUNNEL", tls_listener_menu),
         "3": ("DNSTT", lambda: block_menu("dnstt")),
         "4": ("BHTTP", lambda: block_menu("bhttp")),
