@@ -29,29 +29,7 @@ import (
 
 // BHTTPConfig defines the settings for the integrated BHTTP transport. A nil
 // *BHTTPConfig in the main config disables it entirely.
-type BHTTPV1Config struct {
-	Mode                          string `json:"mode,omitempty"`
-	CapabilityTest                bool   `json:"capability_test,omitempty"`
-	CapabilityTimeoutMs           int    `json:"capability_timeout_ms,omitempty"`
-	UploadChunk                   int    `json:"upload_chunk,omitempty"`
-	UploadConnections             int    `json:"upload_connections,omitempty"`
-	UploadRequestsPerConnection   int    `json:"upload_requests_per_connection,omitempty"`
-	MaxRetries                    int    `json:"max_retries,omitempty"`
-	RetryIntervalMs               int    `json:"retry_interval_ms,omitempty"`
-	DownloadChunk                 int    `json:"download_chunk,omitempty"`
-	DownloadConnections           int    `json:"download_connections,omitempty"`
-	DownloadRequestsPerConnection int    `json:"download_requests_per_connection,omitempty"`
-	DNSTimeoutMs                  int    `json:"dns_timeout_ms,omitempty"`
-	ConnectionTimeoutMs           int    `json:"connection_timeout_ms,omitempty"`
-	ReadTimeoutMs                 int    `json:"read_timeout_ms,omitempty"`
-	CloseTimeoutMs                int    `json:"close_timeout_ms,omitempty"`
-}
-
-// BHTTPConfig defines the settings for the integrated BHTTP transport.
 type BHTTPConfig struct {
-	V1Profile string         `json:"v1_profile,omitempty"`
-	V1        *BHTTPV1Config `json:"v1,omitempty"`
-
 	// Listen lists the TCP addresses to bind. IPv6 addresses must use bracket
 	// form, for example "[::]:8880". Empty uses the default 0.0.0.0:8880.
 	// Ports 80/8080 normally belong to the HTTP+SSH proxy listeners, so BHTTP
