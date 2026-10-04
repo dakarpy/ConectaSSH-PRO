@@ -2023,8 +2023,8 @@ def restore_users_backup():
 
 def user_backup_menu():
     menu("BACKUP DE USUARIOS SSH", {
-        "1": ("Crear backup de usuarios", backup_users),
-        "2": ("Restaurar backup detectado en /root", restore_users_backup),
+        "1": ("Crear Backup de usuarios", backup_users),
+        "2": ("Restaurar Backup de usuarios", restore_users_backup),
     }, force_single=True, force_one_page=True)
 
 
@@ -2042,16 +2042,14 @@ def config_menu():
         "2": ("Cambiar puertos de escucha SSH", set_ssh_ports),
         "3": ("Ancho de banda / límites de conexiones", set_ssh_limits),
         "4": ("MULTIPROTOCOLO", multi_protocol_menu),
-        "5": ("BACKUP Y RESTAURAR USUARIOS", user_backup_menu),
-        "6": ("Configuración de Xray", xray_settings_menu),
-        "7": ("Configuración del bot de Telegram", bot_settings_menu),
-        "8": ("Servidores administrados", managed_servers_menu),
-        "9": ("Contraseña de API", api_menu),
-        "10": ("Registros recientes", logs),
-        "11": ("Reiniciar servicio", lambda: service_action("restart")),
-        "12": ("Actualizar desde Git", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
-        "13": ("CHECKUSER DUAL", checkuser_dual_menu),
-        "14": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
+        "5": ("Configuración de Xray", xray_settings_menu),
+        "6": ("Configuración del bot de Telegram", bot_settings_menu),
+        "7": ("Servidores administrados", managed_servers_menu),
+        "8": ("Contraseña de API", api_menu),
+        "9": ("Registros recientes", logs),
+        "10": ("Reiniciar servicio", lambda: service_action("restart")),
+        "11": ("Actualizar desde Git", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
+        "12": ("CHECKUSER DUAL", checkuser_dual_menu),
     }, force_single=True, force_one_page=True)
 
 
@@ -2082,7 +2080,9 @@ def main_menu_options():
         "3": ("GESTIONAR PROTOCOLOS", connection_menu),
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
-        "6": ("CONFIGURACIÓN", config_menu),
+        "6": ("BACKUP DE USUARIOS", user_backup_menu),
+        "7": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
+        "8": ("CONFIGURACIÓN", config_menu),
     }
 
 
