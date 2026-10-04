@@ -1739,9 +1739,6 @@ def toggle_server_bool(key, label):
     print(f"{label}: {'ACTIVO' if not current else 'DESACTIVADO'}")
 
 
-def auto_menu_toggle():
-    toggle_server_bool("auto_menu", "AUTO MENU")
-
 
 def ssh_connection_limit_toggle():
     toggle_server_bool("ssh_connection_limit_enabled", "LIMITADOR SSH")
@@ -1789,11 +1786,9 @@ def xray_menu():
 
 def config_menu():
     document = request("GET", "/api/server/config") or {}
-    auto_state = "ACTIVO" if document.get("auto_menu", False) else "DESACTIVADO"
     menu("CONFIGURACIÓN", {"1": ("Configurar banner SSH", set_banner),
                            "2": ("Cambiar puertos de escucha SSH", set_ssh_ports),
                            "3": ("Ancho de banda / límites de conexiones", set_ssh_limits),
-                           "4": (f"AUTO MENU: {auto_state}", auto_menu_toggle),
                            "5": ("Todas las opciones del servidor y protocolos", server_settings_menu),
                            "6": ("Configuración de Xray", xray_settings_menu),
                            "7": ("Configuración del bot de Telegram", bot_settings_menu),
@@ -1833,7 +1828,6 @@ def main_menu_options():
         "9": ("REINICIAR SERVICIO", lambda: service_action("restart")),
         "10": ("ACTUALIZAR DESDE GIT", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
         "11": ("CHECKUSER DUAL", checkuser_dual_menu),
-        "12": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
     }
 
 
