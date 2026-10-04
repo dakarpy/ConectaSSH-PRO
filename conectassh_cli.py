@@ -815,9 +815,9 @@ def field_menu(title, path, fields, parent_keys=()):
 
 
 SSH_FIELDS = (
-    ("listen", "Escucha SSH/HTTP principal", "text"),
-    ("extra_listen", "Escuchas públicas adicionales", "list"),
-    ("local_ssh_listen", "Escucha SSH local", "text"),
+    ("listen", "WEBSOCKET SSH PRINCIPAL", "text"),
+    ("extra_listen", "WEBSOCKET SSH SECUNDARIO", "list"),
+    ("local_ssh_listen", "PUERTO SSH LOCAL/INTERNO", "text"),
     ("host_key_file", "Archivo de clave del host SSH", "text"),
     ("banner", "Texto del banner SSH", "text"),
     ("banner_file", "Archivo del banner SSH", "text"),
