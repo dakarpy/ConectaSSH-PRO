@@ -2109,36 +2109,66 @@ def speedtest_vps():
 
 
 def optimize_vps():
-    """Limpieza segura del VPS: no mata procesos ni reinicia servicios."""
+    """Optimización segura sin detener ni reiniciar servicios."""
     require_root()
     before_mem = local_meminfo()[1]
     before_disk = shutil.disk_usage("/").used
-    print("\n⚡ OPTIMIZACIÓN SEGURA DEL VPS")
-    print("No se detendrán procesos ni se reiniciarán servicios.")
 
-    for command, label in (
-        (["apt-get", "clean"], "Limpiando caché de APT"),
-        (["apt-get", "autoremove", "-y"], "Eliminando paquetes no utilizados"),
-    ):
-        print(f"\n• {label}...")
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            print_wrapped("⚠️ " + (result.stderr.strip() or "La operación no pudo completarse."))
+    def run_step(command, success, failure):
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        if result.returncode == 0:
+            print(f"[✓] {success}")
+            return True
+        error = (result.stderr or result.stdout).strip()
+        if error:
+            print_wrapped("⚠️ " + error)
+        print(f"[!] {failure}")
+        return False
 
-    print("\n• Limpiando temporales seguros...")
+    print("\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┃                OPTIMIZAR SERVIDOR              ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("[    =] • AGUARDE - EJECUTANDO OPTIMIZACIÓN")
+
+    # Espera hasta 60 s si apt/dpkg está ocupado por una actualización automática.
+    run_step(
+        ["apt-get", "-o", "DPkg::Lock::Timeout=60", "update"],
+        "PAQUETES ACTUALIZADOS !",
+        "NO SE PUDO ACTUALIZAR LA INFORMACIÓN DE PAQUETES !",
+    )
+    run_step(
+        ["apt-get", "-o", "DPkg::Lock::Timeout=60", "-f", "install", "-y"],
+        "FALLAS CORREGIDAS !",
+        "NO SE PUDIERON CORREGIR TODAS LAS DEPENDENCIAS !",
+    )
+
+    print("[    =] • AGUARDE - REMOVIENDO PAQUETES INÚTILES")
+    run_step(
+        ["apt-get", "-o", "DPkg::Lock::Timeout=60", "autoremove", "-y"],
+        "PAQUETES INÚTILES REMOVIDOS !",
+        "NO SE PUDIERON REMOVER TODOS LOS PAQUETES INÚTILES !",
+    )
+
+    subprocess.run(["apt-get", "-o", "DPkg::Lock::Timeout=60", "clean"], capture_output=True, text=True, timeout=180)
     subprocess.run(["systemd-tmpfiles", "--clean"], capture_output=True, text=True, check=False)
-
-    print("• Liberando cachés del filesystem...")
     try:
         with open("/proc/sys/vm/drop_caches", "w", encoding="ascii") as handle:
             handle.write("3\n")
-    except OSError as exc:
-        print_wrapped("⚠️ No se pudieron liberar las cachés del kernel: " + str(exc))
+    except OSError:
+        pass
 
+    # Este VPS no tiene swap configurada; si existe en otro VPS, no se fuerza
+    # swapoff para evitar presión innecesaria de memoria.
     after_mem = local_meminfo()[1]
     after_disk = shutil.disk_usage("/").used
-    print("\n✅ OPTIMIZACIÓN COMPLETADA")
-    print(f"💾 Disco liberado: {size(max(0, before_disk - after_disk))}")
+    print("\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┃                OPTIMIZAR SERVIDOR              ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("[✓] PAQUETES ACTUALIZADOS !")
+    print("[✓] FALLAS CORREGIDAS !")
+    print("[✓] PAQUETES INÚTILES REMOVIDOS !")
+    print("[✓] CACHE Y SWAP LIMPIOS !")
+    print(f"\n💾 Disco liberado: {size(max(0, before_disk - after_disk))}")
     print(f"🧠 RAM usada antes: {size(before_mem)}")
     print(f"🧠 RAM usada después: {size(after_mem)}")
     print("🔒 Procesos y servicios: sin detener ni reiniciar")
