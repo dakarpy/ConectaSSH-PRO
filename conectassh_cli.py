@@ -1674,7 +1674,7 @@ def menu(title, options, two_columns=False):
         labels = [str(label) for label, _ in current_options.values()]
         half = max(1, (terminal_columns() - 8) // 2)
         auto_two_columns = terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels)
-        page_size = 8 if terminal_columns() <= 48 else 12
+        page_size = 16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12)
         entries = list(current_options.items())
         pages = max(1, (len(entries) + page_size - 1) // page_size)
         page = min(page, pages - 1)
