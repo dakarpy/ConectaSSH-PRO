@@ -1486,14 +1486,14 @@ def connection_protocols_visual():
 
 def connection_menu():
     menu("MODOS DE CONEXIÓN", {
-        "1": ("Estado visual de protocolos", connection_protocols_visual),
-        "2": ("Puertos y transportes", connection_status),
+        "1": ("PROTOCOLOS ACTIVOS", connection_protocols_visual),
+        "2": ("PUERTOS ACTIVOS", connection_status),
         "3": ("Estadísticas DNSTT / BHTTP / HCR / BTUN", protocol_stats),
-        "4": ("Escuchas y configuración de protocolos", server_settings_menu),
+        "4": ("CONFIGURAR PROTOCOLOS Y MODOS DE CONEXIÓN", server_settings_menu),
         "5": ("Certificados TLS", certificate_list),
         "6": ("Clave pública DNSTT", lambda: print(json.dumps(request("GET", "/api/dnstt/pubkey"), indent=2))),
         "7": ("Registros de protocolos", protocol_logs),
-        "8": ("Generar certificado TLS autofirmado", generate_tls_certificate),
+        "8": ("GENERAR CERTIFICADO TLS AUTOFIRMADO PARA TLS TUNNEL/XRAY", generate_tls_certificate),
         "9": ("Solicitar certificado Let's Encrypt", lambda: generate_tls_certificate(True)),
         "10": ("Regenerar clave DNSTT", regenerate_dnstt_key),
     })
