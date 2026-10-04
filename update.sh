@@ -339,6 +339,7 @@ apply_update() {
     warn "  Previous menu command saved to $MENU_BACKUP"
   fi
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/menu
+install -m 644 "$SOURCE_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
   info "  ConectaSSH-PRO CLI updated."
 
   copy_optional_script "update.sh" 700

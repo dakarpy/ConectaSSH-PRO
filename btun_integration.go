@@ -232,7 +232,8 @@ func (btunPanelAccountant) Admit(username, remote string, closer io.Closer) (btu
 	// count against the same allowance, so a user cannot double their limit by
 	// mixing transports.
 	active := len(u.conns) + u.btunConns
-	if cfg.MaxConnections > 0 && active >= cfg.MaxConnections {
+	global := getGlobalCfg()
+	if global != nil && global.SSHConnectionLimitEnabled && cfg.MaxConnections > 0 && active >= cfg.MaxConnections {
 		u.mu.Unlock()
 		return nil, fmt.Errorf("connection limit reached (%d)", cfg.MaxConnections)
 	}

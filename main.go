@@ -98,6 +98,12 @@ type Config struct {
 	BannerFile string `json:"banner_file"`
 
 	UserCount bool `json:"user_count"`
+	// AutoMenu enables the administration menu automatically for root interactive shells.
+	AutoMenu bool `json:"auto_menu"`
+
+	// SSHConnectionLimitEnabled controls the per-user max_connections enforcement.
+	// The account value remains available for display/check APIs even when disabled.
+	SSHConnectionLimitEnabled bool `json:"ssh_connection_limit_enabled"`
 
 	// PAMAuthEnabled turns on Linux system-password login for this server. When
 	// true, an SSH login with a username not present in the panel is verified

@@ -385,6 +385,9 @@ func (c *fakeCloser) Close() error {
 }
 
 func TestBTUNSessionsShareMaxConnectionsWithSSH(t *testing.T) {
+	oldCfg := getGlobalCfg()
+	setGlobalCfg(&Config{SSHConnectionLimitEnabled: true})
+	t.Cleanup(func() { setGlobalCfg(oldCfg) })
 	user := &UserState{Cfg: UserConfig{Username: "limited", Password: "pass", MaxConnections: 2}}
 	withPanelUsers(t, user)
 

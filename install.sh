@@ -292,6 +292,7 @@ if [[ ( -e /usr/local/bin/menu || -L /usr/local/bin/menu ) && "$(readlink -f /us
   warn "  Previous menu command saved to $MENU_BACKUP"
 fi
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/menu
+install -m 644 "$SCRIPT_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
 info "  ConectaSSH-PRO CLI installed: menu (also conectassh)"
 mkdir -p "$INSTALL_DIR/source"
 rsync -a --delete --exclude '.git' --exclude 'source/' --exclude '__pycache__/' "$SCRIPT_DIR/" "$INSTALL_DIR/source/"

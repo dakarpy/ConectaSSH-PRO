@@ -1731,9 +1731,26 @@ def pam_auth_menu():
     print(f"Estado actual: {state}")
 
 
+def toggle_server_bool(key, label):
+    document = request("GET", "/api/server/config") or {}
+    current = bool(document.get(key, False))
+    document[key] = not current
+    save_settings("/api/server/config", document)
+    print(f"{label}: {'ACTIVO' if not current else 'DESACTIVADO'}")
+
+
+def auto_menu_toggle():
+    toggle_server_bool("auto_menu", "AUTO MENU")
+
+
+def ssh_connection_limit_toggle():
+    toggle_server_bool("ssh_connection_limit_enabled", "LIMITADOR SSH")
+
+
 def ssh_menu():
     document = request("GET", "/api/server/config") or {}
     pam_state = "ACTIVO" if document.get("pam_auth_enabled", True) else "DESACTIVADO"
+    limit_state = "ACTIVO" if document.get("ssh_connection_limit_enabled", False) else "DESACTIVADO"
     menu("GESTOR DE USUARIOS SSH", {
         "1": ("Crear usuario", create_user),
         "2": ("Crear prueba", lambda: create_user(test_hours=24)),
@@ -1745,6 +1762,7 @@ def ssh_menu():
         "8": ("Listar usuarios", list_users),
         "9": ("Restablecer tráfico", reset_traffic),
         "10": (f"PAM: {pam_state}", pam_auth_menu),
+        "11": (f"LIMITAR SSH: {limit_state}", ssh_connection_limit_toggle),
     }, two_columns=True)
 
 
@@ -1770,13 +1788,16 @@ def xray_menu():
 
 
 def config_menu():
+    document = request("GET", "/api/server/config") or {}
+    auto_state = "ACTIVO" if document.get("auto_menu", False) else "DESACTIVADO"
     menu("CONFIGURACIÓN", {"1": ("Configurar banner SSH", set_banner),
                            "2": ("Cambiar puertos de escucha SSH", set_ssh_ports),
                            "3": ("Ancho de banda / límites de conexiones", set_ssh_limits),
-                           "4": ("Todas las opciones del servidor y protocolos", server_settings_menu),
-                           "5": ("Configuración de Xray", xray_settings_menu),
-                           "6": ("Configuración del bot de Telegram", bot_settings_menu),
-                           "7": ("Servidores administrados", managed_servers_menu)})
+                           "4": (f"AUTO MENU: {auto_state}", auto_menu_toggle),
+                           "5": ("Todas las opciones del servidor y protocolos", server_settings_menu),
+                           "6": ("Configuración de Xray", xray_settings_menu),
+                           "7": ("Configuración del bot de Telegram", bot_settings_menu),
+                           "8": ("Servidores administrados", managed_servers_menu)})
 
 
 def api_menu():

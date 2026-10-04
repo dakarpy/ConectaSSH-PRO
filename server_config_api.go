@@ -93,10 +93,12 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 	// blocks the distinction matters twice over: a missing key must keep the
 	// running service, while an explicit null is the panel disabling it.
 	var fieldPresence struct {
-		PAMAuthEnabled *bool            `json:"pam_auth_enabled"`
-		BHTTP          *json.RawMessage `json:"bhttp"`
-		BTUN           *json.RawMessage `json:"btun"`
-		HCR            *json.RawMessage `json:"hcr"`
+		PAMAuthEnabled            *bool            `json:"pam_auth_enabled"`
+		AutoMenu                  *bool            `json:"auto_menu"`
+		SSHConnectionLimitEnabled *bool            `json:"ssh_connection_limit_enabled"`
+		BHTTP                     *json.RawMessage `json:"bhttp"`
+		BTUN                      *json.RawMessage `json:"btun"`
+		HCR                       *json.RawMessage `json:"hcr"`
 	}
 	if err := json.Unmarshal(body, &fieldPresence); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -122,6 +124,12 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 		newCfg.Users = globalCfg.Users
 		if fieldPresence.PAMAuthEnabled == nil {
 			newCfg.PAMAuthEnabled = globalCfg.PAMAuthEnabled
+		}
+		if fieldPresence.AutoMenu == nil {
+			newCfg.AutoMenu = globalCfg.AutoMenu
+		}
+		if fieldPresence.SSHConnectionLimitEnabled == nil {
+			newCfg.SSHConnectionLimitEnabled = globalCfg.SSHConnectionLimitEnabled
 		}
 		if fieldPresence.BHTTP == nil {
 			newCfg.BHTTP = globalCfg.BHTTP
