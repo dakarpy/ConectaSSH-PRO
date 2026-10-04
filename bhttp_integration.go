@@ -60,10 +60,6 @@ type BHTTPConfig struct {
 	// may keep attached. Zero uses the protocol default (128).
 	MaxV2Lanes int `json:"max_v2_lanes,omitempty"`
 
-	DownloadChunk int    `json:"download_chunk,omitempty"`
-	MaxBatchCount int    `json:"max_batch_count,omitempty"`
-	DialTimeout   string `json:"dial_timeout,omitempty"`
-
 	// MaxSessions caps concurrently tracked BHTTP sessions. Once reached, new
 	// session IDs are refused while existing sessions keep working. Zero uses a
 	// safe default; negative disables the cap.
@@ -98,8 +94,6 @@ const (
 	defaultBHTTPSessionTimeout = 2 * time.Minute
 	defaultBHTTPMaxSessions    = 10000
 	defaultBHTTPMaxConnections = 10000
-	defaultBHTTPDownloadChunk  = 65536
-	defaultBHTTPMaxBatchCount  = 256
 	// bhttpTargetLabel is the "address" handed to the dialer. BHTTP never dials
 	// a TCP target, so this is only what shows up in logs.
 	bhttpTargetLabel = "bhttp"
@@ -330,22 +324,6 @@ func startBHTTPInstance(cfg *BHTTPConfig) error {
 	} else if maxSessions < 0 {
 		maxSessions = 0 // unlimited
 	}
-	dialTimeout := bhttpDialTimeout(cfg)
-	downloadChunk := cfg.DownloadChunk
-	if downloadChunk <= 0 {
-		downloadChunk = defaultBHTTPDownloadChunk
-	}
-	if downloadChunk > bhttp.MaxDownloadSize {
-		downloadChunk = bhttp.MaxDownloadSize
-	}
-	maxBatchCount := cfg.MaxBatchCount
-	if maxBatchCount <= 0 {
-		maxBatchCount = defaultBHTTPMaxBatchCount
-	}
-	if maxBatchCount > 256 {
-		maxBatchCount = 256
-	}
-
 	maxConnections := cfg.MaxConnections
 	if maxConnections == 0 {
 		maxConnections = defaultBHTTPMaxConnections
@@ -356,10 +334,7 @@ func startBHTTPInstance(cfg *BHTTPConfig) error {
 	server := bhttp.NewServer(bhttp.Config{
 		TargetAddress:  bhttpTargetLabel,
 		SessionTimeout: sessionTimeout,
-		DialTimeout:    dialTimeout,
 		MaxV2Lanes:     cfg.MaxV2Lanes,
-		DownloadChunk:  downloadChunk,
-		MaxBatchCount:  maxBatchCount,
 		MaxSessions:    maxSessions,
 		MaxConnections: maxConnections,
 		LogConnections: cfg.LogConnections,
@@ -474,22 +449,6 @@ func bhttpSessionTimeout(cfg *BHTTPConfig) time.Duration {
 	if err != nil || d <= 0 {
 		bhttpLog.Printf("invalid session_timeout %q; using default %s", raw, defaultBHTTPSessionTimeout)
 		return defaultBHTTPSessionTimeout
-	}
-	return d
-}
-
-func bhttpDialTimeout(cfg *BHTTPConfig) time.Duration {
-	if cfg == nil {
-		return 10 * time.Second
-	}
-	raw := strings.TrimSpace(cfg.DialTimeout)
-	if raw == "" {
-		return 10 * time.Second
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		bhttpLog.Printf("invalid dial_timeout %q; using default 10s", raw)
-		return 10 * time.Second
 	}
 	return d
 }

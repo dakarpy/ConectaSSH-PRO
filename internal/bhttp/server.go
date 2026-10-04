@@ -20,12 +20,8 @@ type Config struct {
 	SessionTimeout time.Duration
 	DialTimeout    time.Duration
 	MaxV2Lanes     int
-	// DownloadChunk caps bytes per download frame. Zero uses 65536.
-	DownloadChunk int
-	// MaxBatchCount caps frames requested by one batch. Zero uses 256.
-	MaxBatchCount int
-	Logger        *log.Logger
-	DialTarget    func(string) (net.Conn, error)
+	Logger         *log.Logger
+	DialTarget     func(string) (net.Conn, error)
 	// MaxConnections caps concurrently accepted client sockets across every
 	// listener served by this server. Zero or negative disables the cap.
 	MaxConnections int
@@ -110,18 +106,6 @@ func NewServer(config Config) *Server {
 	}
 	if config.MaxV2Lanes <= 0 {
 		config.MaxV2Lanes = bhttpV2MaxLanes
-	}
-	if config.DownloadChunk <= 0 {
-		config.DownloadChunk = 65536
-	}
-	if config.DownloadChunk > MaxDownloadSize {
-		config.DownloadChunk = MaxDownloadSize
-	}
-	if config.MaxBatchCount <= 0 {
-		config.MaxBatchCount = 256
-	}
-	if config.MaxBatchCount > 256 {
-		config.MaxBatchCount = 256
 	}
 	if config.Logger == nil {
 		config.Logger = log.Default()
@@ -479,7 +463,7 @@ func (server *Server) handleRequest(writer io.Writer, session *Session, request 
 		return WriteStatus(writer, StatusOK, ack)
 
 	case ModeDownload:
-		chunks := session.AssignDownload(request.Seq, 1, server.config.DownloadChunk)
+		chunks := session.AssignDownload(request.Seq, 1, 65536)
 		server.stats.downloadBytes.Add(uint64(len(chunks[0])))
 		return WriteDownload(writer, request.SID, request.Mode, request.Seq, chunks[0])
 
@@ -499,8 +483,8 @@ func (server *Server) handleRequest(writer io.Writer, session *Session, request 
 		if count < 1 {
 			count = 1
 		}
-		if count > server.config.MaxBatchCount {
-			count = server.config.MaxBatchCount
+		if count > 256 {
+			count = 256
 		}
 		chunks := session.AssignDownload(request.Seq, count, limit)
 		for offset, chunk := range chunks {

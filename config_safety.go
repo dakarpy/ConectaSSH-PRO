@@ -337,21 +337,6 @@ func normalizeRuntimePorts(cfg *Config) []string {
 			warn("BHTTP max_v2_lanes %d is invalid; using the protocol default", cfg.BHTTP.MaxV2Lanes)
 			cfg.BHTTP.MaxV2Lanes = 0
 		}
-		if cfg.BHTTP.DownloadChunk < 0 {
-			warn("BHTTP download_chunk %d is invalid; using default 65536", cfg.BHTTP.DownloadChunk)
-			cfg.BHTTP.DownloadChunk = 0
-		} else if cfg.BHTTP.DownloadChunk > 524284 {
-			warn("BHTTP download_chunk %d is above maximum; clamping to %d", cfg.BHTTP.DownloadChunk, 524284)
-			cfg.BHTTP.DownloadChunk = 524284
-		}
-		if cfg.BHTTP.MaxBatchCount < 0 {
-			warn("BHTTP max_batch_count %d is invalid; using default 256", cfg.BHTTP.MaxBatchCount)
-			cfg.BHTTP.MaxBatchCount = 0
-		} else if cfg.BHTTP.MaxBatchCount > 256 {
-			warn("BHTTP max_batch_count %d is above maximum; clamping to 256", cfg.BHTTP.MaxBatchCount)
-			cfg.BHTTP.MaxBatchCount = 256
-		}
-		normalizeDurationField(&cfg.BHTTP.DialTimeout, "BHTTP dial_timeout", 1*time.Second, 2*time.Minute, warn)
 		if cfg.BHTTP.MaxSessions < -1 {
 			warn("BHTTP max_sessions %d is invalid; using unlimited (-1)", cfg.BHTTP.MaxSessions)
 			cfg.BHTTP.MaxSessions = -1

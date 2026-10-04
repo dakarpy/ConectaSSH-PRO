@@ -848,8 +848,6 @@ BLOCKS = {
     "bhttp": ("BHTTP", {"listen": [], "shared_ports": True}, (
         ("listen", "Escuchas TCP", "list"), ("shared_ports", "Compartir puertos SSH/TLS", "bool"),
         ("session_timeout", "Tiempo de espera de sesión", "text"), ("max_v2_lanes", "Máximo de canales V2", "int"),
-        ("download_chunk", "Bytes máximos por trama de descarga", "int"), ("max_batch_count", "Máximo de tramas por batch", "int"),
-        ("dial_timeout", "Tiempo de conexión al destino", "text"),
         ("max_sessions", "Máximo de sesiones", "int"), ("max_connections", "Máximo de conexiones", "int"),
         ("disable_console_log", "Silenciar registros de consola", "bool"), ("log_connections", "Registrar conexiones", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
