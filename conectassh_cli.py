@@ -833,7 +833,7 @@ SSH_FIELDS = (
 )
 
 BLOCKS = {
-    "dnstt": ("DNSTT", {"domain": "", "udp_listen": "0.0.0.0:5300"}, (
+    "dnstt": ("DNSTT / SLOWDNS", {"domain": "", "udp_listen": "0.0.0.0:5300"}, (
         ("domain", "Dominio del túnel DNS", "text"), ("domains", "Dominios aceptados", "list"),
         ("udp_listen", "Escucha UDP", "text"), ("privkey_file", "Archivo de clave privada", "text"),
         ("fake_dns_enabled", "DNS local simulado", "bool"), ("fake_dns_listen", "Escucha DNS simulado", "text"),
@@ -873,7 +873,7 @@ BLOCKS = {
         ("disable_console_log", "Silenciar registros de consola", "bool"), ("log_connections", "Registrar conexiones", "bool"),
         ("auto_restart_interval", "Intervalo de reinicio", "text"), ("auto_restart_grace", "Tiempo de gracia del reinicio", "text"),
     )),
-    "udpgw": ("UDPGW", {"listen": "0.0.0.0:7300"}, (
+    "udpgw": ("UDPGW / BADVPN", {"listen": "0.0.0.0:7300"}, (
         ("listen", "Escucha TCP", "text"), ("max_frame", "Máximo de bytes por trama", "int"),
         ("debug", "Registros de depuración", "bool"), ("hexdump", "Bytes del volcado hexadecimal", "int"),
         ("write_chan", "Tamaño de cola de escritura", "int"), ("udp_bind", "IP de enlace UDP", "text"),
@@ -1046,8 +1046,8 @@ def tls_listener_menu():
 
 def server_settings_menu():
     menu("CONFIGURACIÓN DEL SERVIDOR", {
-        "1": ("SSH y escuchas públicas", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
-        "2": ("Escuchas TLS", tls_listener_menu),
+        "1": ("WEBSOCKET / SSH", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
+        "2": ("TLS TUNNEL", tls_listener_menu),
         "3": ("DNSTT", lambda: block_menu("dnstt")),
         "4": ("BHTTP", lambda: block_menu("bhttp")),
         "5": ("BTUN", lambda: block_menu("btun")),
