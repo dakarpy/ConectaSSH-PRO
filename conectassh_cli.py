@@ -9,6 +9,7 @@ import argparse
 import copy
 import datetime as dt
 import getpass
+import gzip
 import json
 import os
 from pathlib import Path
@@ -1957,16 +1958,57 @@ def xray_menu():
 
 def backup_users_file_path():
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    return Path("/root") / f"ConectaSSH-backup-{timestamp}.json"
+    return Path("/root") / f"ConectaSSH-backup-{timestamp}.json.gz"
 
 
 def find_user_backups():
     root = Path("/root")
     if not root.is_dir():
         return []
-    paths = list(root.glob("ConectaSSH-backup-*.json"))
+    paths = list(root.glob("ConectaSSH-backup-*.json.gz"))
+    paths += list(root.glob("ConectaSSH-backup-*.json"))
     paths += list(root.glob("ConectaSSH-users-backup-*.vps"))
     return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _write_backup_atomic(target, document):
+    """Write a compressed backup atomically with strict permissions."""
+    target = Path(target)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        os.chmod(tmp, 0o600)
+        with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=6) as handle:
+            json.dump(document, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        with tmp.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        os.chmod(target, 0o600)
+        dir_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except (OSError, gzip.BadGzipFile, ValueError) as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise CLIError(f"No se pudo escribir el backup {target}: {exc}") from exc
+
+
+def _read_backup_document(path):
+    path = Path(path)
+    try:
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                return json.load(handle)
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, gzip.BadGzipFile, EOFError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CLIError(f"No se pudo leer el backup {path}: {exc}") from exc
 
 
 def backup_users():
@@ -1981,17 +2023,16 @@ def backup_users():
         "xray": {"config": xray},
     }
     target = backup_users_file_path()
-    target.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.chmod(target, 0o600)
+    _write_backup_atomic(target, document)
     print("\n✅ BACKUP CONECTA SSH CREADO")
     print(f"📁 Archivo: {target}")
     print(f"👤 Usuarios SSH: {len(users)}")
     print(f"✖️ Entradas Xray: {len(xray.get('inbounds') or [])}")
-    print("📦 Incluye usuarios SSH + configuración Xray")
+    print("📦 Incluye usuarios SSH + configuración Xray (gzip)")
 
 
 def restore_own_backup(path):
-    document = json.loads(path.read_text(encoding="utf-8"))
+    document = _read_backup_document(path)
     if document.get("format") != "conecta-ssh-backup" or document.get("version") != 2:
         raise CLIError("El archivo no es un backup Conecta SSH v2")
     users = (document.get("ssh") or {}).get("users") or []
@@ -2034,7 +2075,8 @@ def _choose_backup(paths, title):
 
 def restore_own_backup_menu():
     require_root()
-    paths = sorted(Path("/root").glob("ConectaSSH-backup-*.json"),
+    paths = sorted([*Path("/root").glob("ConectaSSH-backup-*.json.gz"),
+                    *Path("/root").glob("ConectaSSH-backup-*.json")],
                    key=lambda p: p.stat().st_mtime, reverse=True)
     path = _choose_backup(paths, "BACKUPS CONECTA SSH")
     if not path:
@@ -2063,50 +2105,6 @@ def user_backup_menu():
         "2": ("Restaurar Backup Conecta SSH", restore_own_backup_menu),
         "3": ("Restaurar Backup SSHPlus", restore_sshplus_from_menu),
     }, force_single=True, force_one_page=True)
-
-def speedtest_vps():
-    """Ejecuta Speedtest y muestra un resultado limpio en español."""
-    require_root()
-    binary = shutil.which("speedtest-cli") or shutil.which("speedtest")
-    if not binary:
-        raise CLIError("Speedtest no está instalado")
-
-    print("\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-    print("┃             TEST DE VELOCIDAD DEL VPS            ┃")
-    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
-    print("[===  ] • ESPERE - EJECUTANDO PRUEBA")
-
-    result = subprocess.run(
-        [binary, "--json", "--share"],
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    output = (result.stdout or "").strip()
-    if result.returncode != 0 or not output:
-        error = (result.stderr or output).strip()
-        raise CLIError(error or "Speedtest no pudo completarse")
-
-    try:
-        data = json.loads(output)
-        ping = float(data.get("ping", 0.0))
-        download = float(data.get("download", 0.0)) / 1_000_000
-        upload = float(data.get("upload", 0.0)) / 1_000_000
-        share = str(data.get("share") or "").strip()
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise CLIError("Respuesta inválida del Speedtest: " + str(exc))
-
-    if not share:
-        share = "No disponible"
-
-    print("\n[✓] PRUEBA DE VELOCIDAD FINALIZADA")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print(f"PING: {ping:.2f} ms")
-    print(f"DESCARGA: {download:.2f} Mbps")
-    print(f"SUBIDA: {upload:.2f} Mbps")
-    print(f"ENLACE: {share}")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
 
 def optimize_vps():
     """Optimización segura sin detener ni reiniciar servicios."""
@@ -2192,11 +2190,6 @@ def optimize_vps():
     print("🔒 Procesos y servicios: sin detener ni reiniciar")
 
 
-def user_backup_menu():
-    menu("BACKUP DE USUARIOS SSH", {
-        "1": ("Crear Backup de usuarios", backup_users),
-        "2": ("Restaurar Backup de usuarios", restore_users_backup),
-    }, force_single=True, force_one_page=True)
 
 
 def multi_protocol_menu():
@@ -2253,7 +2246,6 @@ def main_menu_options():
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
         "7": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
-        "8": ("SPEEDTEST", speedtest_vps),
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
     }

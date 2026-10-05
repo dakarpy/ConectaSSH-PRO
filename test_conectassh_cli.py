@@ -1,6 +1,8 @@
 import importlib.util
 import copy
+import gzip
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -64,10 +66,15 @@ class TokenManagementTest(unittest.TestCase):
         self.assertIn("Xray: 3 conectados", header)
         self.assertIn("18.50 Mbps", header)
         self.assertEqual(len({len(row) for row in header.splitlines()}), 1)
-        menu_text = cli.render_menu("MAIN MENU", cli.main_menu_options(), status)
-        self.assertIn("MODOS DE CONEXIÓN", menu_text)
+        with patch.object(cli, "request", return_value={"auto_menu": False}):
+            menu_text = cli.render_menu(
+                "MAIN MENU", cli.main_menu_options(), status
+            )
+            mobile = cli.render_menu(
+                "MAIN MENU", cli.main_menu_options(), status, columns=40
+            )
+        self.assertIn("MODO DE CONEXIÓN", menu_text)
         self.assertNotIn("Resellers", menu_text)
-        mobile = cli.render_menu("MAIN MENU", cli.main_menu_options(), status, columns=40)
         self.assertLessEqual(max(map(len, mobile.splitlines())), 40)
         self.assertIn("CPU: 2 (12.5%", mobile)
         self.assertIn("Onlines: 1", mobile)
@@ -151,13 +158,44 @@ class TokenManagementTest(unittest.TestCase):
         with patch.object(cli, "menu") as open_menu:
             cli.config_menu()
             config = open_menu.call_args.args[1]
-            self.assertIs(config["4"][1], cli.server_settings_menu)
+            self.assertIs(config["4"][1], cli.multi_protocol_menu)
             self.assertIs(config["5"][1], cli.xray_settings_menu)
             self.assertIs(config["6"][1], cli.bot_settings_menu)
             cli.connection_menu()
             self.assertIs(open_menu.call_args.args[1]["3"][1], cli.protocol_stats)
             cli.xray_menu()
             self.assertIs(open_menu.call_args.args[1]["7"][1], cli.xray_settings_menu)
+
+    def test_user_backup_menu_is_unique_and_points_to_conecta_backup_flow(self):
+        with patch.object(cli, "request", return_value={"auto_menu": False}):
+            self.assertIs(cli.main_menu_options()["6"][1], cli.user_backup_menu)
+        self.assertEqual(cli.user_backup_menu.__code__.co_filename, str(MODULE))
+
+    def test_backup_is_gzip_atomic_and_mode_600(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "ConectaSSH-backup-test.json.gz"
+            document = {"format": "conecta-ssh-backup", "version": 2,
+                        "ssh": {"users": [{"username": "alice"}]},
+                        "xray": {"config": {"inbounds": []}}}
+            cli._write_backup_atomic(target, document)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(cli._read_backup_document(target), document)
+            self.assertFalse(list(Path(directory).glob("*.tmp")))
+
+    def test_backup_creation_uses_compression_and_secure_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "backup.json.gz"
+            with patch.object(cli, "require_root"), \
+                    patch.object(cli, "backup_users_file_path", return_value=target), \
+                    patch.object(cli, "request", side_effect=[
+                        {"users": [{"username": "alice"}]},
+                        {"inbounds": []},
+                    ]), redirect_stdout(io.StringIO()):
+                cli.backup_users()
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload["ssh"]["users"][0]["username"], "alice")
 
     def test_guided_config_labels_fit_mobile_width(self):
         options = {str(i): (field[1], lambda: None) for i, field in enumerate(cli.SSH_FIELDS, 1)}

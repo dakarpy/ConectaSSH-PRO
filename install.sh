@@ -16,11 +16,69 @@ PANEL_LOG_MAX_BYTES="${PANEL_LOG_MAX_BYTES:-1048576}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GO_VERSION="${GO_VERSION:-$(awk '$1 == "go" {print $2; exit}' "$SCRIPT_DIR/go.mod" 2>/dev/null || echo "1.22.5")}"
 REPO_URL="${REPO_URL:-https://github.com/dakarpy/ConectaSSH-PRO.git}"
+XRAY_VERSION="${XRAY_VERSION:-v26.3.27}"
+XRAY_SHA256_AMD64="${XRAY_SHA256_AMD64:-23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae}"
+XRAY_SHA256_ARM64="${XRAY_SHA256_ARM64:-4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c}"
+MIN_DISK_GB="${MIN_DISK_GB:-5}"
+MIN_RAM_MB="${MIN_RAM_MB:-2048}"
+ROLLBACK_DIR=""
+INSTALL_SUCCESS=false
+INSTALL_STARTED=false
+CLEANUP_RUNNING=false
+GO_ROLLBACK_DIR=""
 MKDIR_BIN="$(command -v mkdir 2>/dev/null || true)"
 [[ -n "$MKDIR_BIN" ]] || MKDIR_BIN="/bin/mkdir"
 # ────────────────────────────────────────────────────────────────────────────
 
 [[ $EUID -ne 0 ]] && error "Run as root: sudo bash $0"
+
+validate_supported_os() {
+  local version_id="${VERSION_ID:-}"
+  case "${OS_ID:-}:${version_id}" in
+    ubuntu:20.04|ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12) ;;
+    *) error "Sistema operativo no soportado: ${OS_PRETTY:-unknown}. Soportados: Ubuntu 20.04, 22.04, 24.04, 26.04 y Debian 12." ;;
+  esac
+}
+
+check_tcp_ports() {
+  local port
+  for port in "${REQUIRED_TCP_PORTS[@]}"; do
+    if ss -H -ltn "( sport = :$port )" 2>/dev/null | grep -q .; then
+      error "Puerto TCP ${port} ya está ocupado."
+    fi
+  done
+}
+
+check_udp_ports() {
+  local port
+  for port in "${REQUIRED_UDP_PORTS[@]}"; do
+    if ss -H -lun "( sport = :$port )" 2>/dev/null | grep -q .; then
+      error "Puerto UDP ${port} ya está ocupado."
+    fi
+  done
+}
+
+preflight_checks() {
+  info "[PRECHECK] Validando entorno..."
+  [[ "$EUID" -eq 0 ]] || error "El instalador debe ejecutarse como root."
+  require_systemd
+  case "$(uname -m)" in x86_64|aarch64) ;; *) error "Arquitectura no soportada: $(uname -m)." ;; esac
+  [[ -e "$INSTALL_DIR" || -e "/etc/systemd/system/${SERVICE_NAME}.service" ]] && error "Ya existe una instalación de Conecta SSH. Se requiere una VPS limpia."
+  local disk_gb ram_mb
+  disk_gb="$(df -BG --output=avail / | tail -1 | tr -dc "0-9")"
+  [[ "$disk_gb" =~ ^[0-9]+$ ]] || error "No se pudo determinar el espacio libre de /."
+  (( disk_gb >= MIN_DISK_GB )) || error "Espacio insuficiente en /: ${disk_gb} GB. Mínimo: ${MIN_DISK_GB} GB."
+  ram_mb="$(awk '/MemTotal:/ {printf "%d\n", $2/1024; exit}' /proc/meminfo)"
+  (( ram_mb >= MIN_RAM_MB )) || error "RAM insuficiente: ${ram_mb} MB. Mínimo: ${MIN_RAM_MB} MB."
+  command -v ss >/dev/null 2>&1 || error "El comando ss es obligatorio."
+  command -v getent >/dev/null 2>&1 || error "El comando getent es obligatorio."
+  command -v curl >/dev/null 2>&1 || error "curl es obligatorio."
+  getent ahosts github.com >/dev/null 2>&1 || error "La resolución DNS hacia github.com falló."
+  curl -fsS --connect-timeout 5 --max-time 15 https://github.com/ >/dev/null || error "No hay conectividad HTTPS hacia GitHub."
+  check_tcp_ports
+  check_udp_ports
+  info "  Root/arch/disco/RAM/DNS/Internet/puertos: OK"
+}
 
 # Cross-distro helpers -------------------------------------------------------
 PKG_MANAGER=""
@@ -32,6 +90,8 @@ MOUNT_BIN="$(command -v mount 2>/dev/null || echo /bin/mount)"
 MOUNTPOINT_BIN="$(command -v mountpoint 2>/dev/null || echo /usr/bin/mountpoint)"
 TOUCH_BIN="$(command -v touch 2>/dev/null || echo /usr/bin/touch)"
 CHMOD_BIN="$(command -v chmod 2>/dev/null || echo /usr/bin/chmod)"
+REQUIRED_TCP_PORTS=(80 443 8080 8880 9090 10086)
+REQUIRED_UDP_PORTS=(53 7300)
 
 require_systemd() {
   SYSTEMCTL_BIN="$(command -v systemctl 2>/dev/null || true)"
@@ -195,6 +255,65 @@ echo -e "\n${GREEN}════════════════════�
 echo -e "${GREEN}   SSH Panel + Xray-core  ·  Installer     ${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}\n"
 
+create_rollback_snapshot() {
+  ROLLBACK_DIR="$(mktemp -d /var/tmp/sshpanel-rollback.XXXXXX)"
+  mkdir -p "$ROLLBACK_DIR/files"
+  : > "$ROLLBACK_DIR/manifest"
+  local path key
+  for path in /etc/fstab /etc/resolv.conf /etc/profile.d/go.sh /etc/profile.d/conecta-auto-menu.sh /etc/systemd/system/sshpanel.service /etc/systemd/system/sshpanel-dnstt-redirect.service /usr/local/sbin/sshpanel-dnstt-redirect.sh /usr/local/bin/menu /usr/local/bin/conectassh; do
+    key="$(printf '%s' "$path" | sed 's#^/##; s#[/]#_#g')"
+    if [[ -e "$path" || -L "$path" ]]; then
+      printf 'EXISTS\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"
+      tar -C / -czf "$ROLLBACK_DIR/files/${key}.tar.gz" "${path#/}"
+    else
+      printf 'ABSENT\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"
+    fi
+  done
+  info "  Snapshot de rollback creado: $ROLLBACK_DIR"
+}
+
+restore_rollback_snapshot() {
+  [[ -n "$ROLLBACK_DIR" && -f "$ROLLBACK_DIR/manifest" ]] || return 0
+  warn "Restaurando configuraciones previas..."
+  local state path key archive
+  while IFS=$'\t' read -r state path key; do
+    [[ -n "$path" ]] || continue
+    rm -rf -- "$path"
+    if [[ "$state" == "EXISTS" ]]; then
+      archive="$ROLLBACK_DIR/files/${key}.tar.gz"
+      [[ -f "$archive" ]] && tar -C / -xzf "$archive"
+    fi
+  done < "$ROLLBACK_DIR/manifest"
+  "${SYSTEMCTL_BIN:-systemctl}" daemon-reload >/dev/null 2>&1 || true
+}
+
+cleanup() {
+  local rc="${1:-0}"
+  [[ "$CLEANUP_RUNNING" == "true" ]] && return 0
+  CLEANUP_RUNNING=true
+  if [[ "$INSTALL_SUCCESS" != "true" && "$INSTALL_STARTED" == "true" ]]; then
+    warn "Instalación fallida. Ejecutando rollback..."
+    "${SYSTEMCTL_BIN:-systemctl}" stop sshpanel.service sshpanel-dnstt-redirect.service >/dev/null 2>&1 || true
+    "${SYSTEMCTL_BIN:-systemctl}" disable sshpanel.service sshpanel-dnstt-redirect.service >/dev/null 2>&1 || true
+    if mountpoint -q "$INSTALL_DIR/logs" 2>/dev/null; then
+      umount "$INSTALL_DIR/logs" >/dev/null 2>&1 || true
+    fi
+    restore_rollback_snapshot
+    if [[ -n "$GO_ROLLBACK_DIR" && -d "$GO_ROLLBACK_DIR" ]]; then
+      rm -rf /usr/local/go
+      mv "$GO_ROLLBACK_DIR" /usr/local/go
+    fi
+    rm -rf "$INSTALL_DIR"
+  fi
+  rm -rf /tmp/xray.*.zip /tmp/xray-extract.* /tmp/go.tar.gz "$ROLLBACK_DIR"
+  return "$rc"
+}
+
+trap 'exit 1' ERR
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'rc=$?; cleanup "$rc"; exit "$rc"' EXIT
+
 # ── 1. OS / package-manager detection ────────────────────────────────────────
 info "[1/10] Detecting Linux distribution and package manager…"
 if [[ -f /etc/os-release ]]; then
@@ -216,6 +335,10 @@ info "  OS             : $OS_PRETTY"
 info "  ID / ID_LIKE   : $OS_ID / ${OS_LIKE:-none}"
 info "  Package manager: $PKG_MANAGER"
 info "  Service manager: systemd"
+validate_supported_os
+preflight_checks
+create_rollback_snapshot
+INSTALL_STARTED=true
 
 # ── 2. System dependencies ───────────────────────────────────────────────────
 info "[2/10] Installing system packages…"
@@ -245,7 +368,10 @@ if $NEED_GO; then
   GO_URL="https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz"
   info "  Downloading $GO_URL"
   wget -q --show-progress -O /tmp/go.tar.gz "$GO_URL"
-  rm -rf /usr/local/go
+  if [[ -d /usr/local/go ]]; then
+    GO_ROLLBACK_DIR="$ROLLBACK_DIR/previous-go"
+    mv /usr/local/go "$GO_ROLLBACK_DIR"
+  fi
   tar -C /usr/local -xzf /tmp/go.tar.gz
   rm -f /tmp/go.tar.gz
   echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
@@ -274,7 +400,6 @@ BUILD_REPO_URL="$(git -C "$SCRIPT_DIR" config --get remote.origin.url 2>/dev/nul
 [[ -n "$BUILD_REPO_URL" ]] || BUILD_REPO_URL="$REPO_URL"
 
 go mod download
-go mod tidy
 go build -ldflags="-s -w -X main.buildCommit=$BUILD_COMMIT -X main.buildBranch=$BUILD_BRANCH -X main.buildTime=$BUILD_TIME" -o "$INSTALL_DIR/sshpanel" .
 printf '%s\n' "$BUILD_COMMIT" > "$INSTALL_DIR/.installed_commit"
 printf '%s\n' "$BUILD_BRANCH" > "$INSTALL_DIR/.installed_branch"
@@ -323,27 +448,27 @@ if [[ -f "$SCRIPT_DIR/update.sh" ]]; then
 fi
 
 # ── 6. Xray binary ──────────────────────────────────────────────────────────
-info "[6/10] Downloading Xray-core…"
-XRAY_VER=$(curl -sf "https://api.github.com/repos/XTLS/Xray-core/releases/latest" \
-  | grep '"tag_name"' | head -1 | cut -d'"' -f4 || echo "v24.11.30")
-MACHINE=$(uname -m)
-case "$MACHINE" in
-  x86_64)  XRAY_ARCH="64" ;;
-  aarch64) XRAY_ARCH="arm64-v8a" ;;
-  armv7l)  XRAY_ARCH="arm32-v7a" ;;
-  *)       XRAY_ARCH="64" ;;
-esac
-XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-${XRAY_ARCH}.zip"
-info "  Xray ${XRAY_VER} (${XRAY_ARCH})"
-wget -q --show-progress -O /tmp/xray.zip "$XRAY_URL"
-unzip -o /tmp/xray.zip xray -d "$INSTALL_DIR" > /dev/null 2>&1 || {
-  mkdir -p /tmp/xray_extract
-  unzip -o /tmp/xray.zip -d /tmp/xray_extract > /dev/null 2>&1
-  mv /tmp/xray_extract/xray "$INSTALL_DIR/xray"
+info "[6/10] Installing fixed Xray-core…"
+install_xray() {
+  local machine xray_arch xray_sha256 xray_url xray_tmp xray_extract
+  machine="$(uname -m)"
+  case "$machine" in
+    x86_64) xray_arch="64"; xray_sha256="$XRAY_SHA256_AMD64" ;;
+    aarch64) xray_arch="arm64-v8a"; xray_sha256="$XRAY_SHA256_ARM64" ;;
+    *) error "Arquitectura no soportada para Xray: $machine" ;;
+  esac
+  xray_url="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-${xray_arch}.zip"
+  xray_tmp="$(mktemp /tmp/xray.XXXXXX.zip)"
+  xray_extract="$(mktemp -d /tmp/xray-extract.XXXXXX)"
+  info "  Xray ${XRAY_VERSION} (${xray_arch})"
+  wget -q --show-progress -O "$xray_tmp" "$xray_url"
+  printf "%s  %s\n" "$xray_sha256" "$xray_tmp" | sha256sum -c -
+  unzip -q -o "$xray_tmp" xray -d "$xray_extract"
+  install -m 0755 "$xray_extract/xray" "$INSTALL_DIR/xray"
+  rm -rf "$xray_extract" "$xray_tmp"
+  "$INSTALL_DIR/xray" version
 }
-chmod +x "$INSTALL_DIR/xray"
-rm -f /tmp/xray.zip
-"$INSTALL_DIR/xray" version
+install_xray
 
 # ── 7. PostgreSQL ────────────────────────────────────────────────────────────
 info "[7/10] Configuring PostgreSQL…"
@@ -733,6 +858,7 @@ echo -e "  API token + DB credentials stored in: ${INSTALL_DIR}/.env"
 echo -e "  Logs: journalctl -u ${SERVICE_NAME} -f"
 echo -e "        tail -f ${INSTALL_DIR}/logs/panel.log"
 echo ""
+INSTALL_SUCCESS=true
 echo -e "${YELLOW}View/rotate the API password later with: sudo conectassh api-password show|change${NC}"
 echo ""
 "$SYSTEMCTL_BIN" status "$SERVICE_NAME" --no-pager -l || true
