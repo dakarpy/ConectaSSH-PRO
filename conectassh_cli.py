@@ -1701,6 +1701,65 @@ def logs():
     subprocess.run(["journalctl", "-u", SERVICE, "-n", "80", "--no-pager"])
 
 
+UPDATE_REPO_URL = "https://github.com/dakarpy/ConectaSSH-PRO.git"
+UPDATE_REF = "refs/heads/main"
+
+
+def installed_commit():
+    path = INSTALL_DIR / ".installed_commit"
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return value
+
+
+def check_for_update():
+    """Consulta el commit remoto sin modificar la instalación."""
+    local = installed_commit()
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", UPDATE_REPO_URL, UPDATE_REF],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CLIError(f"No se pudo consultar GitHub: {exc}")
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()
+        raise CLIError(f"No se pudo consultar GitHub{(': ' + detail) if detail else ''}")
+    remote = (result.stdout or "").split()[0] if result.stdout else ""
+    if not remote:
+        raise CLIError("GitHub no devolvió un commit válido para main")
+
+    print("\nACTUALIZACIÓN DEL PANEL")
+    print(f"Commit instalado : {local or 'desconocido'}")
+    print(f"Commit disponible: {remote}")
+    if local and local == remote:
+        print("✓ El panel ya está actualizado.")
+        return False
+    print("⚠ Hay una nueva versión disponible.")
+    return True
+
+
+def update_menu():
+    def search():
+        check_for_update()
+
+    def update_now():
+        if check_for_update():
+            if confirm("¿Aplicar la actualización ahora?"):
+                update_from_git()
+
+    menu("ACTUALIZACIÓN DEL PANEL", {
+        "1": ("Buscar nueva versión", search),
+        "2": ("Actualizar ahora", update_now),
+        "0": ("Volver", lambda: None),
+    }, force_single=True, force_one_page=True)
+
+
 def update_from_git():
     updater = INSTALL_DIR / "update.sh"
     if not updater.is_file():
@@ -2212,7 +2271,7 @@ def config_menu():
         "8": ("Contraseña de API", api_menu),
         "9": ("Registros recientes", logs),
         "10": ("Reiniciar servicio", lambda: service_action("restart")),
-        "11": ("Actualizar desde Git", lambda: update_from_git() if confirm("¿Actualizar desde Git ahora?") else None),
+        "11": ("ACTUALIZACIÓN DEL PANEL", update_menu),
         "12": ("CHECKUSER DUAL", checkuser_dual_menu),
     }, force_single=True, force_one_page=True)
 

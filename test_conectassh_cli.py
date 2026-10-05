@@ -166,6 +166,22 @@ class TokenManagementTest(unittest.TestCase):
             cli.xray_menu()
             self.assertIs(open_menu.call_args.args[1]["7"][1], cli.xray_settings_menu)
 
+    def test_check_for_update_detects_matching_remote_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(cli, "INSTALL_DIR", Path(directory)), \
+                    patch.object(cli.subprocess, "run", return_value=type("Result", (), {
+                        "returncode": 0, "stdout": "abc123 refs/heads/main\n", "stderr": ""})()):
+                (Path(directory) / ".installed_commit").write_text("abc123\n", encoding="utf-8")
+                self.assertFalse(cli.check_for_update())
+
+    def test_check_for_update_detects_new_remote_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(cli, "INSTALL_DIR", Path(directory)), \
+                    patch.object(cli.subprocess, "run", return_value=type("Result", (), {
+                        "returncode": 0, "stdout": "def456 refs/heads/main\n", "stderr": ""})()):
+                (Path(directory) / ".installed_commit").write_text("abc123\n", encoding="utf-8")
+                self.assertTrue(cli.check_for_update())
+
     def test_user_backup_menu_is_unique_and_points_to_conecta_backup_flow(self):
         with patch.object(cli, "request", return_value={"auto_menu": False}):
             self.assertIs(cli.main_menu_options()["6"][1], cli.user_backup_menu)
