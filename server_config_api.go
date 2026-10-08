@@ -19,6 +19,8 @@ var (
 
 	bannerMu          sync.RWMutex
 	currentBannerText string
+	bannerEnabledMu   sync.RWMutex
+	bannerEnabled     = true
 )
 
 func setGlobalCfg(c *Config) {
@@ -43,6 +45,18 @@ func getBannerText() string {
 	bannerMu.RLock()
 	defer bannerMu.RUnlock()
 	return currentBannerText
+}
+
+func setBannerEnabled(enabled bool) {
+	bannerEnabledMu.Lock()
+	bannerEnabled = enabled
+	bannerEnabledMu.Unlock()
+}
+
+func getBannerEnabled() bool {
+	bannerEnabledMu.RLock()
+	defer bannerEnabledMu.RUnlock()
+	return bannerEnabled
 }
 
 // ---------- HTTP handler ----------
@@ -93,9 +107,9 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 	// blocks the distinction matters twice over: a missing key must keep the
 	// running service, while an explicit null is the panel disabling it.
 	var fieldPresence struct {
-		PAMAuthEnabled            *bool            `json:"pam_auth_enabled"`
-		AutoMenu                  *bool            `json:"auto_menu"`
-		SSHConnectionLimitEnabled *bool            `json:"ssh_connection_limit_enabled"`
+		PAMAuthEnabled            *bool `json:"pam_auth_enabled"`
+		AutoMenu                  *bool `json:"auto_menu"`
+		SSHConnectionLimitEnabled *bool `json:"ssh_connection_limit_enabled"`
 	}
 	if err := json.Unmarshal(body, &fieldPresence); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)

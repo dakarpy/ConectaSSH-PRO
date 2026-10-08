@@ -1460,19 +1460,119 @@ def managed_servers_menu():
                              for i, server in enumerate(servers, 1)})
 
 
-def set_banner():
-    cfg = request("GET", "/api/server/config")
-    print("Ingresá el texto del banner y terminá con una línea que contenga solamente un punto:")
+def _banner_status(cfg):
+    return "ACTIVADO" if cfg.get("banner_enabled", True) else "DESACTIVADO"
+
+
+def _read_banner_text(cfg):
+    text = str(cfg.get("banner") or "")
+    if not text and cfg.get("banner_file"):
+        try:
+            text = Path(str(cfg["banner_file"])).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            pass
+    return text
+
+
+def _banner_editor(current=""):
+    print("\nPegá/escribí el banner línea por línea.")
+    print("Finalizá escribiendo solamente un punto (.) en una línea.")
+    if current:
+        print("\n--- BANNER ACTUAL ---")
+        print(current.rstrip())
+        print("--- FIN BANNER ACTUAL ---\n")
     lines = []
     while True:
         line = input()
         if line == ".":
             break
         lines.append(line)
-    cfg["banner"] = "\n".join(lines)
-    request("POST", "/api/server/config", cfg)
-    print("Banner aplicado.")
+    return "\n".join(lines).strip("\n")
 
+
+def banner_save(cfg):
+    request("POST", "/api/server/config", cfg)
+    print("Banner guardado y aplicado en caliente.")
+
+
+def banner_enable():
+    cfg = request("GET", "/api/server/config") or {}
+    cfg["banner_enabled"] = True
+    banner_save(cfg)
+
+
+def banner_disable():
+    cfg = request("GET", "/api/server/config") or {}
+    if not confirm("¿Desactivar el BANNER SSH para todos los nuevos accesos?"):
+        return
+    cfg["banner_enabled"] = False
+    banner_save(cfg)
+
+
+def banner_create():
+    cfg = request("GET", "/api/server/config") or {}
+    text = _banner_editor()
+    if not text:
+        raise CLIError("El banner no puede quedar vacío. Para ocultarlo usá DESACTIVAR.")
+    cfg["banner"] = text
+    cfg["banner_enabled"] = True
+    banner_save(cfg)
+
+
+def banner_edit():
+    cfg = request("GET", "/api/server/config") or {}
+    current = _read_banner_text(cfg)
+    if not current:
+        print("No hay un banner personalizado guardado. Usá CREAR NUEVO.")
+        return
+    text = _banner_editor(current)
+    if not text:
+        raise CLIError("El banner no puede quedar vacío. Para ocultarlo usá DESACTIVAR.")
+    cfg["banner"] = text
+    cfg["banner_enabled"] = True
+    banner_save(cfg)
+
+
+def banner_show():
+    cfg = request("GET", "/api/server/config") or {}
+    print("\nEstado: " + _banner_status(cfg))
+    text = _read_banner_text(cfg)
+    if text:
+        print("\n--- BANNER PERSONALIZADO ---")
+        print(text.rstrip())
+        print("--- FIN BANNER ---")
+    else:
+        print("\nNo hay texto personalizado.")
+        print("Se mantiene el banner de cuenta predeterminado de ConectaSSH-PRO cuando está ACTIVADO.")
+
+
+def banner_restore_default():
+    cfg = request("GET", "/api/server/config") or {}
+    if not confirm("¿Restaurar el BANNER SSH predeterminado de ConectaSSH-PRO?"):
+        return
+    cfg["banner"] = ""
+    cfg["banner_enabled"] = True
+    banner_save(cfg)
+
+
+def banner_menu():
+    def options():
+        cfg = request("GET", "/api/server/config") or {}
+        status = _banner_status(cfg)
+        return {
+            "1": (f"ACTIVAR BANNER  [actual: {status}]", banner_enable),
+            "2": (f"DESACTIVAR BANNER  [actual: {status}]", banner_disable),
+            "3": ("CREAR NUEVO BANNER", banner_create),
+            "4": ("EDITAR BANNER", banner_edit),
+            "5": ("VER BANNER ACTUAL", banner_show),
+            "6": ("RESTAURAR BANNER POR DEFECTO", banner_restore_default),
+        }
+    menu("BANNER SSH", options, force_single=True, force_one_page=True)
+
+
+def set_banner():
+    # Compatibilidad con instalaciones/scripts antiguos: abrir el gestor nuevo.
+    banner_menu()
 
 def set_ssh_ports():
     cfg = request("GET", "/api/server/config")
@@ -2406,6 +2506,7 @@ def main_menu_options():
         "8": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
+        "11": ("BANNER SSH", banner_menu),
     }
 
 

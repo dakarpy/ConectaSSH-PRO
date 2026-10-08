@@ -94,8 +94,9 @@ type Config struct {
 	HostKeyFile    string `json:"host_key_file"`
 	Quiet          bool   `json:"quiet"`
 
-	Banner     string `json:"banner"`
-	BannerFile string `json:"banner_file"`
+	Banner        string `json:"banner"`
+	BannerFile    string `json:"banner_file"`
+	BannerEnabled bool   `json:"banner_enabled"`
 
 	UserCount bool `json:"user_count"`
 	// AutoMenu enables the administration menu automatically for root interactive shells.
@@ -1307,17 +1308,23 @@ func loadConfig(path string) (*Config, map[string]*UserState, error) {
 	}
 
 	var cfg Config
+	var rawConfig map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawConfig); err != nil {
+		return nil, nil, fmt.Errorf("parse config: %w", err)
+	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse config: %w", err)
 	}
 	// PAM is enabled by default for new installations/configurations. Preserve
 	// an explicit false so existing administrators can disable it intentionally.
-	var rawConfig map[string]json.RawMessage
-	if err := json.Unmarshal(data, &rawConfig); err == nil {
-		if _, present := rawConfig["pam_auth_enabled"]; !present {
-			cfg.PAMAuthEnabled = true
-		}
+	if _, present := rawConfig["pam_auth_enabled"]; !present {
+		cfg.PAMAuthEnabled = true
 	}
+	// Existing installations predating banner_enabled keep the current banner behavior.
+	if _, present := rawConfig["banner_enabled"]; !present {
+		cfg.BannerEnabled = true
+	}
+
 	if cfg.Xray != nil {
 		cfg.Xray.NormalizeDefaults()
 	}
@@ -3593,6 +3600,7 @@ func main() {
 				log.Printf("failed to read banner file %s: %v", cfg.BannerFile, err)
 			}
 		}
+		setBannerEnabled(cfg.BannerEnabled)
 		setBannerText(bt)
 	}
 
@@ -3644,6 +3652,9 @@ func main() {
 	//   -----------------
 	//   Max Download: 10 Mbps
 	sshConfig.BannerCallback = func(meta ssh.ConnMetadata) string {
+		if !getBannerEnabled() {
+			return ""
+		}
 		var sb strings.Builder
 
 		// Global / custom banner (reads live value so admin-panel edits apply immediately)

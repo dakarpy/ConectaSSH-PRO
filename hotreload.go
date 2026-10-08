@@ -340,6 +340,7 @@ func applyFullConfigReload(newCfg *Config) ConfigReloadReport {
 			bt = string(data)
 		}
 	}
+	setBannerEnabled(newCfg.BannerEnabled)
 	setBannerText(bt)
 
 	// Default per-connection bandwidth limits and SSH inactivity cleanup
