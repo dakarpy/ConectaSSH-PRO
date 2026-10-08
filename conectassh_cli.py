@@ -16,7 +16,6 @@ from pathlib import Path
 import secrets
 import shutil
 import stat
-import select
 import subprocess
 import sys
 import tempfile
@@ -499,7 +498,22 @@ def create_user(default_days=30, test_hours=None):
     if test_hours:
         expires_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=test_hours)).isoformat(timespec="seconds")
     else:
-        expires_at = expiry(str(default_days), "Vencimiento (ejemplo 30)")
+        # El valor 30 es el ejemplo visible y el valor real por defecto.
+        # Se deja el prompt sin [30] para que ENTER represente explícitamente el default.
+        while True:
+            raw_expiry = input("Vencimiento (ejemplo 30): ").strip()
+            if not raw_expiry:
+                raw_expiry = str(default_days)
+            if raw_expiry.lower() in ("never", "none", "nunca", "0"):
+                expires_at = ""
+                break
+            try:
+                day = (dt.date.today() + dt.timedelta(days=int(raw_expiry))
+                       if raw_expiry.isdecimal() else dt.date.fromisoformat(raw_expiry))
+                expires_at = day.isoformat() + "T23:59:59Z"
+                break
+            except ValueError:
+                print("❌ Ingresá AAAA-MM-DD, cantidad de días o nunca.")
 
     max_connections = number("LÍMITE DE CONEXIONES (ejemplo 1)", 1, 0, 10000)
     p = {"username": name, "password": password, "max_connections": max_connections,
@@ -1472,119 +1486,19 @@ def managed_servers_menu():
                              for i, server in enumerate(servers, 1)})
 
 
-def _banner_status(cfg):
-    return "ACTIVADO" if cfg.get("banner_enabled", True) else "DESACTIVADO"
-
-
-def _read_banner_text(cfg):
-    text = str(cfg.get("banner") or "")
-    if not text and cfg.get("banner_file"):
-        try:
-            text = Path(str(cfg["banner_file"])).read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            pass
-    return text
-
-
-def _banner_editor(current=""):
-    print("\nPegá/escribí el banner línea por línea.")
-    print("Finalizá escribiendo solamente un punto (.) en una línea.")
-    if current:
-        print("\n--- BANNER ACTUAL ---")
-        print(current.rstrip())
-        print("--- FIN BANNER ACTUAL ---\n")
+def set_banner():
+    cfg = request("GET", "/api/server/config")
+    print("Ingresá el texto del banner y terminá con una línea que contenga solamente un punto:")
     lines = []
     while True:
         line = input()
         if line == ".":
             break
         lines.append(line)
-    return "\n".join(lines).strip("\n")
-
-
-def banner_save(cfg):
+    cfg["banner"] = "\n".join(lines)
     request("POST", "/api/server/config", cfg)
-    print("Banner guardado y aplicado en caliente.")
+    print("Banner aplicado.")
 
-
-def banner_enable():
-    cfg = request("GET", "/api/server/config") or {}
-    cfg["banner_enabled"] = True
-    banner_save(cfg)
-
-
-def banner_disable():
-    cfg = request("GET", "/api/server/config") or {}
-    if not confirm("¿Desactivar el BANNER SSH para todos los nuevos accesos?"):
-        return
-    cfg["banner_enabled"] = False
-    banner_save(cfg)
-
-
-def banner_create():
-    cfg = request("GET", "/api/server/config") or {}
-    text = _banner_editor()
-    if not text:
-        raise CLIError("El banner no puede quedar vacío. Para ocultarlo usá DESACTIVAR.")
-    cfg["banner"] = text
-    cfg["banner_enabled"] = True
-    banner_save(cfg)
-
-
-def banner_edit():
-    cfg = request("GET", "/api/server/config") or {}
-    current = _read_banner_text(cfg)
-    if not current:
-        print("No hay un banner personalizado guardado. Usá CREAR NUEVO.")
-        return
-    text = _banner_editor(current)
-    if not text:
-        raise CLIError("El banner no puede quedar vacío. Para ocultarlo usá DESACTIVAR.")
-    cfg["banner"] = text
-    cfg["banner_enabled"] = True
-    banner_save(cfg)
-
-
-def banner_show():
-    cfg = request("GET", "/api/server/config") or {}
-    print("\nEstado: " + _banner_status(cfg))
-    text = _read_banner_text(cfg)
-    if text:
-        print("\n--- BANNER PERSONALIZADO ---")
-        print(text.rstrip())
-        print("--- FIN BANNER ---")
-    else:
-        print("\nNo hay texto personalizado.")
-        print("Se mantiene el banner de cuenta predeterminado de ConectaSSH-PRO cuando está ACTIVADO.")
-
-
-def banner_restore_default():
-    cfg = request("GET", "/api/server/config") or {}
-    if not confirm("¿Restaurar el BANNER SSH predeterminado de ConectaSSH-PRO?"):
-        return
-    cfg["banner"] = ""
-    cfg["banner_enabled"] = True
-    banner_save(cfg)
-
-
-def banner_menu():
-    def options():
-        cfg = request("GET", "/api/server/config") or {}
-        status = _banner_status(cfg)
-        return {
-            "1": (f"ACTIVAR BANNER  [actual: {status}]", banner_enable),
-            "2": (f"DESACTIVAR BANNER  [actual: {status}]", banner_disable),
-            "3": ("CREAR NUEVO BANNER", banner_create),
-            "4": ("EDITAR BANNER", banner_edit),
-            "5": ("VER BANNER ACTUAL", banner_show),
-            "6": ("RESTAURAR BANNER POR DEFECTO", banner_restore_default),
-        }
-    menu("BANNER SSH", options, force_single=True, force_one_page=True)
-
-
-def set_banner():
-    # Compatibilidad con instalaciones/scripts antiguos: abrir el gestor nuevo.
-    banner_menu()
 
 def set_ssh_ports():
     cfg = request("GET", "/api/server/config")
@@ -2012,8 +1926,7 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
         labels = [str(label) for label, _ in current_options.values()]
         half = max(1, (terminal_columns() - 8) // 2)
         auto_two_columns = False if force_single else (terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels))
-        # El menú principal siempre muestra todos sus módulos: no ocultar WEB PRO ni BANNER en móviles.
-        page_size = len(current_options) if (force_one_page or title == "MAIN MENU") else (16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12))
+        page_size = len(current_options) if force_one_page else (16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12))
         entries = list(current_options.items())
         pages = max(1, (len(entries) + page_size - 1) // page_size)
         page = min(page, pages - 1)
@@ -2023,38 +1936,7 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
         prompt = paint("Elegí una opción: ", CYAN, True)
         if pages > 1:
             print(" n  Página siguiente   p  Página anterior")
-
-        # Main menu live mode: refresh the VPS/online counters every 2s while
-        # waiting for input. Other menus keep the traditional blocking prompt.
-        if title == "MAIN MENU" and sys.stdin.isatty() and sys.stdout.isatty():
-            print(prompt, end="", flush=True)
-            while True:
-                try:
-                    ready, _, _ = select.select([sys.stdin], [], [], 2.0)
-                except (OSError, ValueError):
-                    ready = [sys.stdin]
-                if ready:
-                    choice = input(prompt).strip().lstrip("0") or "0"
-                    break
-                clear_screen()
-                vps = collect_vps_status()
-                current_options = options() if callable(options) else options
-                labels = [str(label) for label, _ in current_options.values()]
-                half = max(1, (terminal_columns() - 8) // 2)
-                auto_two_columns = False if force_single else (terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels))
-                entries = list(current_options.items())
-                page_size = len(current_options) if title == "MAIN MENU" else page_size
-                pages = max(1, (len(entries) + page_size - 1) // page_size)
-                page = min(page, pages - 1)
-                visible = dict(entries[page * page_size:(page + 1) * page_size])
-                heading = title + (f" ({page + 1}/{pages})" if pages > 1 else "")
-                print(render_menu(heading, visible, vps, two_columns=auto_two_columns))
-                if pages > 1:
-                    print(" n  Página siguiente   p  Página anterior")
-                print(prompt, end="", flush=True)
-            # input() above consumes the line after the prompt already shown.
-        else:
-            choice = input(prompt).strip().lstrip("0") or "0"
+        choice = input(prompt).strip().lstrip("0") or "0"
         if choice.lower() in ("n", "p") and pages > 1:
             page = min(pages - 1, page + 1) if choice.lower() == "n" else max(0, page - 1)
             continue
@@ -2403,104 +2285,6 @@ def multi_protocol_menu():
     }, force_single=True, force_one_page=True)
 
 
-ONLINE_BRIDGE_SERVICE = "conecta-online-bridge.service"
-ONLINE_BRIDGE_DIR = INSTALL_DIR / "online-bridge"
-ONLINE_BRIDGE_BIN = ONLINE_BRIDGE_DIR / "conecta-online-bridge"
-ONLINE_BRIDGE_SOURCE = INSTALL_DIR / "source" / "cmd" / "conecta-online-bridge"
-
-
-def online_bridge_status():
-    enabled = subprocess.run(
-        ["systemctl", "is-enabled", ONLINE_BRIDGE_SERVICE],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    ).returncode == 0
-    active = subprocess.run(
-        ["systemctl", "is-active", ONLINE_BRIDGE_SERVICE],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    ).returncode == 0
-    configured = False
-    cfg_path = Path("/opt/myapp/config.json")
-    if cfg_path.is_file():
-        try:
-            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-            configured = bool(str(cfg.get("api_token", "")).strip() and str(cfg.get("domain", "")).strip())
-        except (OSError, ValueError):
-            pass
-
-    print()
-    print("MÓDULO ONLINE WEB PRO")
-    print("  Servicio : " + ("ACTIVO" if active else "INACTIVO"))
-    print("  Arranque : " + ("AUTOMÁTICO" if enabled else "DESACTIVADO"))
-    print("  Panel    : " + ("CONFIGURADO" if configured else "NO CONFIGURADO"))
-    print("  Binario  : " + ("OK" if ONLINE_BRIDGE_BIN.is_file() else "NO INSTALADO"))
-    print()
-    try:
-        result = subprocess.run(
-            ["journalctl", "-u", ONLINE_BRIDGE_SERVICE, "-n", "1", "--no-pager", "-o", "cat"],
-            capture_output=True, text=True, timeout=3, check=False,
-        )
-        last = result.stdout.strip()
-        if last:
-            print("  Último evento:")
-            print("  " + last[-240:])
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-
-def online_bridge_install_or_activate():
-    ONLINE_BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
-    source = ONLINE_BRIDGE_SOURCE / "main.go"
-    unit = ONLINE_BRIDGE_SOURCE / "conecta-online-bridge.service"
-
-    if not ONLINE_BRIDGE_BIN.is_file():
-        if not source.is_file():
-            raise CLIError("Fuente del módulo no encontrada. Actualiza ConectaSSH-PRO primero.")
-        tmp = ONLINE_BRIDGE_DIR / "conecta-online-bridge.tmp"
-        subprocess.run(
-            ["go", "build", "-trimpath", "-o", str(tmp), "./cmd/conecta-online-bridge"],
-            cwd=str(INSTALL_DIR / "source"), check=True,
-        )
-        os.chmod(tmp, 0o755)
-        os.replace(tmp, ONLINE_BRIDGE_BIN)
-
-    if unit.is_file():
-        tmp_unit = Path("/etc/systemd/system/.conecta-online-bridge.service.tmp")
-        tmp_unit.write_text(unit.read_text(encoding="utf-8"), encoding="utf-8")
-        os.chmod(tmp_unit, 0o644)
-        os.replace(tmp_unit, Path("/etc/systemd/system/conecta-online-bridge.service"))
-
-    subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", ONLINE_BRIDGE_SERVICE], check=True)
-    print("MÓDULO ONLINE WEB PRO: ACTIVO Y CONFIGURADO.")
-
-
-def online_bridge_disable():
-    subprocess.run(["systemctl", "disable", "--now", ONLINE_BRIDGE_SERVICE], check=False)
-    print("MÓDULO ONLINE WEB PRO: DESACTIVADO.")
-
-
-def online_bridge_restart():
-    subprocess.run(["systemctl", "restart", ONLINE_BRIDGE_SERVICE], check=True)
-    print("MÓDULO ONLINE WEB PRO: REINICIADO.")
-
-
-def online_bridge_logs():
-    subprocess.run(
-        ["journalctl", "-u", ONLINE_BRIDGE_SERVICE, "-n", "50", "--no-pager"],
-        check=False,
-    )
-
-
-def online_bridge_menu():
-    menu("MÓDULO ONLINE WEB PRO", {
-        "1": ("Estado de la integración", online_bridge_status),
-        "2": ("Activar / instalar módulo", online_bridge_install_or_activate),
-        "3": ("Desactivar módulo", online_bridge_disable),
-        "4": ("Reiniciar módulo", online_bridge_restart),
-        "5": ("Ver últimos registros", online_bridge_logs),
-    }, force_single=True, force_one_page=True)
-
-
 def config_menu():
     menu("CONFIGURACIÓN", {
         "1": ("Configurar banner SSH", set_banner),
@@ -2547,10 +2331,8 @@ def main_menu_options():
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
         "7": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
-        "8": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
-        "11": ("BANNER SSH", banner_menu),
     }
 
 
