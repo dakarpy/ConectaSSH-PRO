@@ -45,8 +45,30 @@ func runInstallerMode() int {
 	}
 	r := inspectInstallerHost()
 	printInstallerReport(r)
-	fmt.Println("\n[INTELIGENTE] Puerto libre → Conecta puede usarlo; puerto ocupado → queda intacto.")
-	fmt.Println("[INTELIGENTE] No se detienen, matan, deshabilitan ni reconfiguran servicios ajenos.")
+	// Fail closed: no se ejecuta install.sh si el sistema no es compatible
+	// o cualquier puerto predeterminado está ocupado.
+	if !r.systemd {
+		fmt.Println("\nNO SE PUEDE CONTINUAR")
+		fmt.Println("systemd no está disponible en este servidor.")
+		fmt.Println("No se realizaron cambios en el servidor.")
+		return 1
+	}
+	var occupied []installerPort
+	for _, p := range r.ports {
+		if !p.free {
+			occupied = append(occupied, p)
+		}
+	}
+	if len(occupied) > 0 {
+		fmt.Println("\nNO SE PUEDE CONTINUAR")
+		fmt.Println("Libere los puertos marcados antes de continuar.")
+		fmt.Println("No se detendrán servicios existentes.")
+		fmt.Println("No se realizaron cambios en el servidor.")
+		return 1
+	}
+
+	fmt.Println("\n[3/3] Validación completada.")
+	fmt.Println("[✓] Puertos predeterminados disponibles.")
 	if err := executeEmbeddedInstaller(); err != nil {
 		fmt.Fprintf(os.Stderr, "\nERROR: instalación: %v\n", err)
 		return 1
@@ -60,7 +82,7 @@ func inspectInstallerHost() installerReport {
 	for _, p := range []struct {
 		proto string
 		port  int
-	}{{"TCP", 80}, {"TCP", 443}, {"TCP", 8080}, {"TCP", 8880}, {"TCP", 9090}, {"TCP", 10086}, {"UDP", 53}, {"UDP", 7300}} {
+	}{{"TCP", 80}, {"TCP", 443}, {"TCP", 8080}, {"TCP", 7300}, {"TCP", 8880}, {"TCP", 10086}} {
 		r.ports = append(r.ports, inspectPort(p.proto, p.port))
 	}
 	for _, p := range []string{"/opt/sshpanel", "/etc/systemd/system/sshpanel.service", "/etc/systemd/system/sshpanel-dnstt-redirect.service", "/usr/local/bin/conecta"} {
@@ -72,36 +94,72 @@ func inspectInstallerHost() installerReport {
 }
 
 func printInstallerReport(r installerReport) {
-	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
-	fmt.Println("║          CONECTASSH-PRO · INSTALADOR INTELIGENTE           ║")
-	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
-	fmt.Printf("  SO           : %s\n  Arquitectura : %s\n  CPU          : %d\n  RAM          : %d MB\n  Disco libre  : %d GB\n  systemd      : %v\n", r.os, r.arch, r.cpus, r.ramMB, r.diskGB, r.systemd)
-	fmt.Println("  Puertos:")
-	for _, p := range r.ports {
-		if p.free {
-			fmt.Printf("    ✓ %s/%d LIBRE → disponible\n", p.protocol, p.port)
-		} else {
-			fmt.Printf("    ! %s/%d OCUPADO → intacto (%s)\n", p.protocol, p.port, p.owner)
-		}
+	fmt.Println("╔══════════════════════════════════════╗")
+	fmt.Println("║          CONECTA SSH-PRO             ║")
+	fmt.Println("║          INSTALADOR                  ║")
+	fmt.Println("╚══════════════════════════════════════╝")
+	fmt.Println("\n[1/3] Verificando sistema...")
+	fmt.Printf("[✓] %s · %s\n", r.os, r.arch)
+	if r.systemd {
+		fmt.Println("[✓] systemd disponible")
+	} else {
+		fmt.Println("[✗] systemd no disponible")
 	}
-	if len(r.existing) > 0 {
-		fmt.Println("  Conecta existente:")
-		for _, p := range r.existing {
-			fmt.Println("    •", p)
+	fmt.Println("\n[2/3] Verificando puertos...")
+	labels := map[int]string{
+		80:    "SSH WebSocket / BHTTP",
+		443:   "TLS TUNNEL",
+		8080:  "SSH WebSocket / BHTTP",
+		7300:  "UDPGW",
+		8880:  "HCR",
+		10086: "XRAY nativo",
+	}
+	for _, p := range r.ports {
+		state := "[✓]"
+		detail := "disponible"
+		if !p.free {
+			state = "[✗]"
+			detail = "OCUPADO"
+			if p.owner != "" {
+				detail += " · " + p.owner
+			}
 		}
+		fmt.Printf("%s %-23s TCP/%d · %s\n", state, labels[p.port], p.port, detail)
 	}
 }
 
 func inspectPort(proto string, port int) installerPort {
 	p := installerPort{protocol: proto, port: port, free: true}
+	flag := "-H -ltnp"
 	network := "tcp"
 	if proto == "UDP" {
+		flag = "-H -lunp"
 		network = "udp"
 	}
-	ln, err := net.Listen(network, net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
-	if err == nil {
-		_ = ln.Close()
-		return p
+	// Inspectar sockets existentes primero: esto también detecta listeners IPv6
+	// y sockets ligados a direcciones concretas que el bind IPv4 podría omitir.
+	if commandExists("ss") {
+		args := strings.Fields(flag)
+		out, err := exec.Command("ss", append(args, fmt.Sprintf("sport = :%d", port))...).CombinedOutput()
+		if err == nil && strings.TrimSpace(string(out)) != "" {
+			p.free = false
+			p.owner = findPortOwner(proto, port)
+			return p
+		}
+	}
+	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+	if proto == "UDP" {
+		pc, err := net.ListenPacket("udp", address)
+		if err == nil {
+			_ = pc.Close()
+			return p
+		}
+	} else {
+		ln, err := net.Listen(network, address)
+		if err == nil {
+			_ = ln.Close()
+			return p
+		}
 	}
 	p.free = false
 	p.owner = findPortOwner(proto, port)
@@ -115,14 +173,33 @@ func findPortOwner(proto string, port int) string {
 	if proto == "UDP" {
 		flag = "-lunp"
 	}
-	out, err := exec.Command("ss", flag, fmt.Sprintf("sport = :%d", port)).CombinedOutput()
+	out, err := exec.Command("ss", "-H", flag, fmt.Sprintf("sport = :%d", port)).CombinedOutput()
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if i := strings.Index(line, "users:(("); i >= 0 {
-			return line[i:]
+		marker := "users:((\""
+		i := strings.Index(line, marker)
+		if i < 0 {
+			continue
 		}
+		rest := line[i+len(marker):]
+		end := strings.Index(rest, "\"")
+		if end < 0 {
+			continue
+		}
+		name := rest[:end]
+		pid := ""
+		if j := strings.Index(rest, "pid="); j >= 0 {
+			value := rest[j+len("pid="):]
+			if k := strings.IndexAny(value, ",)"); k >= 0 {
+				pid = value[:k]
+			}
+		}
+		if pid != "" {
+			return fmt.Sprintf("%s (PID %s)", name, pid)
+		}
+		return name
 	}
 	return ""
 }

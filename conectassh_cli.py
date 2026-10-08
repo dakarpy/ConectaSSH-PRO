@@ -2637,6 +2637,60 @@ def checkuser_dual_menu():
     print("\nEl repositorio indicado actualmente responde 404; no voy a ejecutar un instalador distinto sin tu autorización.")
 
 
+def auto_configure():
+    """Preflight seguro de puertos; no cambia servicios durante la verificación."""
+    require_root()
+    ports = (
+        (80, "SSH WebSocket / BHTTP"),
+        (8080, "SSH WebSocket / BHTTP"),
+        (443, "TLS TUNNEL"),
+        (8880, "HCR"),
+        (7300, "UDPGW"),
+        (10086, "XRAY nativo"),
+    )
+    print("\n╔══════════════════════════════════════╗")
+    print("║          AUTO CONFIGURAR             ║")
+    print("╚══════════════════════════════════════╝")
+    print("\n[1/3] Analizando servidor...")
+    print("[✓] Verificación iniciada")
+
+    print("\n[2/3] Verificando puertos...")
+    occupied = []
+    for port, protocol in ports:
+        result = subprocess.run(
+            ["ss", "-H", "-ltnp", f"sport = :{port}"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            print("[✗] No se pudo verificar los puertos.")
+            print("No se realizaron cambios en el servidor.")
+            return
+        rows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if rows:
+            row = rows[0]
+            owner = "servicio existente"
+            if 'users:(("' in row:
+                owner = row.split('users:(("', 1)[1].split('"', 1)[0]
+                if "pid=" in row:
+                    pid = row.split("pid=", 1)[1].split(",", 1)[0].split(")", 1)[0]
+                    owner += f" (PID {pid})"
+            occupied.append((port, protocol, owner))
+            print(f"[✗] TCP/{port} · {protocol} · OCUPADO por {owner}")
+        else:
+            print(f"[✓] TCP/{port} · {protocol} · Disponible")
+
+    if occupied:
+        print("\nNO SE PUEDE CONTINUAR")
+        print("Libere los puertos marcados antes de continuar.")
+        print("Conecta no detendrá otros servicios.")
+        print("No se realizaron cambios en el servidor.")
+        return
+
+    print("\n[3/3] Puertos verificados.")
+    print("[✓] Todos los puertos están disponibles.")
+    print("La activación no se ejecutó; no se realizaron cambios.")
+
+
 def main_menu_options():
     return {
         "1": ("GESTOR DE USUARIOS SSH", ssh_menu),
@@ -2650,6 +2704,7 @@ def main_menu_options():
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
         "11": ("BANNER SSH", banner_menu),
+        "12": ("AUTO CONFIGURAR", auto_configure),
     }
 
 

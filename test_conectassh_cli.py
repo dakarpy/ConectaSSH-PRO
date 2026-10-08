@@ -327,5 +327,37 @@ class TokenManagementTest(unittest.TestCase):
         run.assert_called_once_with(["bash", str(updater)], check=False)
 
 
+class AutoConfigurePreflightTest(unittest.TestCase):
+    def test_occupied_default_port_blocks_configuration_without_prompting(self):
+        occupied = SimpleNamespace(
+            returncode=0,
+            stdout='LISTEN 0 4096 *:80 *:* users:(("nginx",pid=4321,fd=7))\n',
+            stderr="",
+        )
+        free = SimpleNamespace(returncode=0, stdout="", stderr="")
+        responses = [occupied, free, free, free, free, free]
+        with patch.object(cli.subprocess, "run", side_effect=responses) as run:
+            with patch("builtins.input", side_effect=AssertionError("must not prompt")):
+                with redirect_stdout(io.StringIO()) as output:
+                    cli.auto_configure()
+        text = output.getvalue()
+        self.assertIn("TCP/80", text)
+        self.assertIn("OCUPADO por nginx (PID 4321)", text)
+        self.assertIn("NO SE PUEDE CONTINUAR", text)
+        self.assertIn("Libere los puertos marcados", text)
+        self.assertIn("No se realizaron cambios", text)
+        self.assertEqual(run.call_count, 6)
+        with patch.object(cli, "request", return_value={"auto_menu": False}):
+            self.assertIn("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
+
+    def test_free_ports_do_not_claim_activation_was_completed(self):
+        free = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch.object(cli.subprocess, "run", return_value=free):
+            with redirect_stdout(io.StringIO()) as output:
+                cli.auto_configure()
+        self.assertIn("Todos los puertos están disponibles", output.getvalue())
+        self.assertIn("La activación no se ejecutó", output.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
