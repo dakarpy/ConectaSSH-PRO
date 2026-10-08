@@ -44,18 +44,24 @@ check_tcp_ports() {
   local port
   for port in "${REQUIRED_TCP_PORTS[@]}"; do
     if ss -H -ltn "( sport = :$port )" 2>/dev/null | grep -q .; then
-      error "Puerto TCP ${port} ya está ocupado."
+      warn "Puerto TCP ${port} ya está ocupado. Se ignora; la instalación continúa sin tocar el servicio existente."
+    else
+      info "Puerto TCP ${port} disponible; Conecta podrá utilizarlo cuando corresponda."
     fi
   done
+  return 0
 }
 
 check_udp_ports() {
   local port
   for port in "${REQUIRED_UDP_PORTS[@]}"; do
     if ss -H -lun "( sport = :$port )" 2>/dev/null | grep -q .; then
-      error "Puerto UDP ${port} ya está ocupado."
+      warn "Puerto UDP ${port} ya está ocupado. Se ignora; la instalación continúa sin tocar el servicio existente."
+    else
+      info "Puerto UDP ${port} disponible; Conecta podrá utilizarlo cuando corresponda."
     fi
   done
+  return 0
 }
 
 preflight_checks() {
@@ -769,7 +775,14 @@ set -euo pipefail
 DNS_UPSTREAM="${DNS_UPSTREAM:-1.1.1.1}"
 DNSTT_PORT="${DNSTT_PORT:-5300}"
 
-# Free port 53 on systemd-resolved based systems and keep outbound DNS working.
+# Never take over UDP 53 if another service already owns it.
+# The installer must continue without stopping, killing, disabling, or reconfiguring that service.
+if command -v ss >/dev/null 2>&1 && ss -H -lun "( sport = :53 )" 2>/dev/null | grep -q .; then
+  echo "WARNING: UDP 53 is occupied; Conecta leaves it untouched and skips the DNSTT redirect." >&2
+  exit 0
+fi
+
+# UDP 53 is free, so Conecta may configure its DNSTT redirect.
 if command -v systemctl >/dev/null 2>&1; then
   systemctl disable --now systemd-resolved.service >/dev/null 2>&1 || true
 fi
