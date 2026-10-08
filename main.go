@@ -1734,6 +1734,7 @@ func startAdminAPI(store *Store, addr string) {
 
 	// SSH user management (session required; role-filtered inside handlers)
 	mux.Handle("/api/users", sessionMiddleware(http.HandlerFunc(handleListUsers)))
+	mux.Handle("/api/online/listall.php", http.HandlerFunc(handleOnlineListAll))
 	mux.Handle("/api/users/backup", sessionMiddleware(http.HandlerFunc(handleBackupUsers(store))))
 	mux.Handle("/api/users/restore", sessionMiddleware(http.HandlerFunc(handleRestoreUsers(store))))
 	mux.Handle("/api/users/create", sessionMiddleware(http.HandlerFunc(handleCreateUser(store))))
@@ -2654,7 +2655,89 @@ func publicKeyCallback(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissio
 
 // ---------- Connection handling ----------
 
+// Online telemetry is intentionally read-only and loopback-only. The bridge
+// polls this endpoint frequently and the runtime connection map is the source
+// of truth, so disconnects disappear as soon as the SSH connection closes.
+type onlineSession struct {
+	Login     string
+	Transport string
+	Remote    string
+	StartedAt time.Time
+}
+
+var onlineSessionsMu sync.RWMutex
+var onlineSessions = make(map[*ssh.ServerConn]onlineSession)
+
+func registerOnlineSession(c *ssh.ServerConn, login, transport string) {
+	if c == nil {
+		return
+	}
+	remote := ""
+	if a := c.RemoteAddr(); a != nil {
+		remote = a.String()
+	}
+	onlineSessionsMu.Lock()
+	onlineSessions[c] = onlineSession{Login: login, Transport: transport, Remote: remote, StartedAt: time.Now()}
+	onlineSessionsMu.Unlock()
+}
+
+func unregisterOnlineSession(c *ssh.ServerConn) {
+	if c == nil {
+		return
+	}
+	onlineSessionsMu.Lock()
+	delete(onlineSessions, c)
+	onlineSessionsMu.Unlock()
+}
+
+func handleOnlineListAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && !net.ParseIP(host).IsLoopback() {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	type record struct {
+		Login       string `json:"login"`
+		Limite      int    `json:"limite"`
+		Tipo        string `json:"tipo"`
+		IP          string `json:"ip"`
+		StartTime   string `json:"start_time"`
+		TempoOnline string `json:"tempo_online"`
+		Dono        string `json:"dono"`
+		Transporte  string `json:"transporte"`
+	}
+	now := time.Now()
+	out := make([]record, 0)
+	onlineSessionsMu.RLock()
+	for _, sess := range onlineSessions {
+		limit, owner := 0, ""
+		if u, ok := userMgr.Get(sess.Login); ok {
+			u.mu.Lock()
+			limit = u.Cfg.MaxConnections
+			owner = u.Cfg.OwnerUsername
+			u.mu.Unlock()
+		}
+		d := now.Sub(sess.StartedAt)
+		if d < 0 {
+			d = 0
+		}
+		out = append(out, record{Login: sess.Login, Limite: limit, Tipo: "ssh", IP: sess.Remote,
+			StartTime: sess.StartedAt.Format("2006-01-02 15:04:05"), TempoOnline: d.Round(time.Second).String(),
+			Dono: owner, Transporte: sess.Transport})
+	}
+	onlineSessionsMu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 func handleConn(tcpConn net.Conn, config *ssh.ServerConfig) {
+	handleConnTransport(tcpConn, config, "SSH")
+}
+
+func handleConnTransport(tcpConn net.Conn, config *ssh.ServerConfig, transport string) {
 	trackedConn := newActivityConn(tcpConn)
 	defer trackedConn.Close()
 
@@ -2691,6 +2774,9 @@ func handleConn(tcpConn net.Conn, config *ssh.ServerConfig) {
 		sshConn.Close()
 		return
 	}
+
+	registerOnlineSession(sshConn, username, transport)
+	defer unregisterOnlineSession(sshConn)
 
 	// Track active connection and enforce max_connections. The connection map is
 	// treated as the source of truth so stale counters can self-heal.

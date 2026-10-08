@@ -16,6 +16,7 @@ from pathlib import Path
 import secrets
 import shutil
 import stat
+import select
 import subprocess
 import sys
 import tempfile
@@ -2010,7 +2011,37 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
         prompt = paint("Elegí una opción: ", CYAN, True)
         if pages > 1:
             print(" n  Página siguiente   p  Página anterior")
-        choice = input(prompt).strip().lstrip("0") or "0"
+
+        # Main menu live mode: refresh the VPS/online counters every 2s while
+        # waiting for input. Other menus keep the traditional blocking prompt.
+        if title == "MAIN MENU" and sys.stdin.isatty() and sys.stdout.isatty():
+            print(prompt, end="", flush=True)
+            while True:
+                try:
+                    ready, _, _ = select.select([sys.stdin], [], [], 2.0)
+                except (OSError, ValueError):
+                    ready = [sys.stdin]
+                if ready:
+                    choice = input(prompt).strip().lstrip("0") or "0"
+                    break
+                clear_screen()
+                vps = collect_vps_status()
+                current_options = options() if callable(options) else options
+                labels = [str(label) for label, _ in current_options.values()]
+                half = max(1, (terminal_columns() - 8) // 2)
+                auto_two_columns = False if force_single else (terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels))
+                entries = list(current_options.items())
+                pages = max(1, (len(entries) + page_size - 1) // page_size)
+                page = min(page, pages - 1)
+                visible = dict(entries[page * page_size:(page + 1) * page_size])
+                heading = title + (f" ({page + 1}/{pages})" if pages > 1 else "")
+                print(render_menu(heading, visible, vps, two_columns=auto_two_columns))
+                if pages > 1:
+                    print(" n  Página siguiente   p  Página anterior")
+                print(prompt, end="", flush=True)
+            # input() above consumes the line after the prompt already shown.
+        else:
+            choice = input(prompt).strip().lstrip("0") or "0"
         if choice.lower() in ("n", "p") and pages > 1:
             page = min(pages - 1, page + 1) if choice.lower() == "n" else max(0, page - 1)
             continue
