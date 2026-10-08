@@ -1193,7 +1193,7 @@ def server_settings_menu():
         "5": ("BTUN", lambda: block_menu("btun")),
         "6": ("HCR", lambda: block_menu("hcr")),
         "7": ("UDPGW", lambda: block_menu("udpgw")),
-        "8": ("SERVICIO XRAY", lambda: block_menu("xray")),
+        "8": ("CONFIGURACIÓN DE XRAY", xray_settings_menu),
     }
 
     while True:
@@ -1443,7 +1443,7 @@ def xray_inbound_settings_menu():
 def xray_settings_menu():
     menu("CONFIGURACIÓN XRAY", {
         "1": ("Entradas y transportes", xray_inbound_settings_menu),
-        "2": ("Servicio nativo / externo", lambda: block_menu("xray")),
+        "2": ("SERVICIO XRAY NATIVA", lambda: block_menu("xray")),
         "3": ("Otros campos de Xray", lambda: tree_browse("/api/xray/config")),
     })
 
@@ -2704,7 +2704,7 @@ def main_menu_options():
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
         "11": ("BANNER SSH", banner_menu),
-        "12": ("AUTO CONFIGURAR", auto_configure),
+        "12": ("CHECKUSER", checkuser_dual_menu),
     }
 
 
