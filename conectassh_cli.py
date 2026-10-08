@@ -1204,8 +1204,10 @@ def server_settings_menu():
             import re
             return re.sub(r"0\.0\.0\.0:(\d+)", r":\1", str(value))
 
-        width = 76
-        inner = 76
+        # Usar el mismo ancho adaptable del menú principal para que el marco
+        # no se corte ni genere líneas verticales desplazadas en Termius móvil.
+        width = min(76, max(24, terminal_columns() - 2))
+        inner = width
         gap = 3
         half = (inner - gap) // 2
         right_width = inner - half - gap
