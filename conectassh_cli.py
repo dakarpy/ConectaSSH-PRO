@@ -2012,7 +2012,8 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
         labels = [str(label) for label, _ in current_options.values()]
         half = max(1, (terminal_columns() - 8) // 2)
         auto_two_columns = False if force_single else (terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels))
-        page_size = len(current_options) if force_one_page else (16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12))
+        # El menú principal siempre muestra todos sus módulos: no ocultar WEB PRO ni BANNER en móviles.
+        page_size = len(current_options) if (force_one_page or title == "MAIN MENU") else (16 if len(current_options) <= 16 else (8 if terminal_columns() <= 48 else 12))
         entries = list(current_options.items())
         pages = max(1, (len(entries) + page_size - 1) // page_size)
         page = min(page, pages - 1)
@@ -2042,6 +2043,7 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
                 half = max(1, (terminal_columns() - 8) // 2)
                 auto_two_columns = False if force_single else (terminal_columns() >= 64 and all(len(label) <= half - 2 for label in labels))
                 entries = list(current_options.items())
+                page_size = len(current_options) if title == "MAIN MENU" else page_size
                 pages = max(1, (len(entries) + page_size - 1) // page_size)
                 page = min(page, pages - 1)
                 visible = dict(entries[page * page_size:(page + 1) * page_size])
