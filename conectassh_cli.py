@@ -481,7 +481,7 @@ def get_user(name):
 
 def create_user(default_days=30, test_hours=None):
     while True:
-        name = ask("NOMBRE DE USUARIO (mín. 4 caracteres)").lower()
+        name = ask("NOMBRE DE USUARIO").lower()
         if len(name) < 4:
             print("❌ El usuario debe tener mínimo 4 caracteres.")
             continue
@@ -490,7 +490,7 @@ def create_user(default_days=30, test_hours=None):
         break
 
     while True:
-        password = ask("CONTRASEÑA (mín. 4 caracteres)")
+        password = ask("CONTRASEÑA")
         if len(password) < 4:
             print("❌ La contraseña debe tener mínimo 4 caracteres.")
             continue
@@ -502,7 +502,7 @@ def create_user(default_days=30, test_hours=None):
         # El valor 30 es el ejemplo visible y el valor real por defecto.
         # Se deja el prompt sin [30] para que ENTER represente explícitamente el default.
         while True:
-            raw_expiry = input("Vencimiento (ejemplo 30): ").strip()
+            raw_expiry = input("VENCIMIENTO: ").strip()
             if not raw_expiry:
                 raw_expiry = str(default_days)
             if raw_expiry.lower() in ("never", "none", "nunca", "0"):
@@ -516,7 +516,7 @@ def create_user(default_days=30, test_hours=None):
             except ValueError:
                 print("❌ Ingresá AAAA-MM-DD, cantidad de días o nunca.")
 
-    max_connections = number("LÍMITE DE CONEXIONES (ejemplo 1)", 1, 0, 10000)
+    max_connections = number("CONEXIONES", 1, 0, 10000)
     p = {"username": name, "password": password, "max_connections": max_connections,
          "expires_at": expires_at, "limit_mbps_up": 0, "limit_mbps_down": 0,
          "data_quota_bytes": 0, "quota_action": "throttle", "quota_throttle_mbps": 10,
