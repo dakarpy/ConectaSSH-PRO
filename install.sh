@@ -423,6 +423,30 @@ mkdir -p "$INSTALL_DIR/source"
 rsync -a --delete --exclude '.git' --exclude 'source/' --exclude '__pycache__/' "$SCRIPT_DIR/" "$INSTALL_DIR/source/"
 
 
+install_online_web_pro_module() {
+  local module_dir="$INSTALL_DIR/online-bridge"
+  local source_dir="$SCRIPT_DIR/cmd/conecta-online-bridge"
+  local tmp_bin="$module_dir/conecta-online-bridge.tmp"
+
+  [[ -f "$source_dir/main.go" ]] || error "MODULO ONLINE WEB PRO source is missing."
+  [[ -f "$source_dir/conecta-online-bridge.service" ]] || error "MODULO ONLINE WEB PRO service template is missing."
+
+  mkdir -p "$module_dir"
+  info "  Building MODULO ONLINE WEB PRO..."
+  go build -trimpath -ldflags="-s -w" -o "$tmp_bin" ./cmd/conecta-online-bridge
+  chmod 0755 "$tmp_bin"
+  mv -f "$tmp_bin" "$module_dir/conecta-online-bridge"
+
+  install -m 0644 "$source_dir/conecta-online-bridge.service" /etc/systemd/system/conecta-online-bridge.service
+  "$SYSTEMCTL_BIN" daemon-reload
+  "$SYSTEMCTL_BIN" enable --now conecta-online-bridge.service
+  info "  MODULO ONLINE WEB PRO: activo por defecto (CPU <= 5%, RAM <= 64 MB)."
+}
+
+
+install_online_web_pro_module
+
+
 install_official_hcr_binary() {
   local arch src dst
   arch="$(uname -m)"

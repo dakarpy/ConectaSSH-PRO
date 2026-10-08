@@ -308,6 +308,34 @@ copy_optional_script() {
   fi
 }
 
+update_online_web_pro_module() {
+  local module_dir="$INSTALL_DIR/online-bridge"
+  local source_dir="$SOURCE_DIR/cmd/conecta-online-bridge"
+  local tmp_bin="$module_dir/conecta-online-bridge.tmp"
+  local had_unit=false
+  local was_enabled=false
+
+  [[ -f "$source_dir/main.go" && -f "$source_dir/conecta-online-bridge.service" ]] || return 0
+
+  [[ -f /etc/systemd/system/conecta-online-bridge.service ]] && had_unit=true
+  "$SYSTEMCTL_BIN" is-enabled --quiet conecta-online-bridge.service 2>/dev/null && was_enabled=true
+
+  mkdir -p "$module_dir"
+  (cd "$SOURCE_DIR" && go build -trimpath -ldflags="-s -w" -o "$tmp_bin" ./cmd/conecta-online-bridge)
+  chmod 0755 "$tmp_bin"
+  mv -f "$tmp_bin" "$module_dir/conecta-online-bridge"
+  install -m 0644 "$source_dir/conecta-online-bridge.service" /etc/systemd/system/conecta-online-bridge.service
+  "$SYSTEMCTL_BIN" daemon-reload
+
+  if $was_enabled || ! $had_unit; then
+    "$SYSTEMCTL_BIN" enable --now conecta-online-bridge.service
+  else
+    "$SYSTEMCTL_BIN" disable --now conecta-online-bridge.service >/dev/null 2>&1 || true
+  fi
+  info "  MODULO ONLINE WEB PRO updated (existing activation state preserved)."
+}
+
+
 apply_update() {
   info "[5/7] Applying update..."
 
@@ -351,6 +379,8 @@ install -m 644 "$SOURCE_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
     rsync -a --delete --exclude '.git' "$SOURCE_DIR/" "$SOURCE_CACHE_DIR/"
     info "  Source files copied to $SOURCE_CACHE_DIR"
   fi
+
+  update_online_web_pro_module
 
   [[ -f "$INSTALL_DIR/banner.txt" ]] || touch "$INSTALL_DIR/banner.txt"
 }

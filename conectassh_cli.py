@@ -2259,6 +2259,104 @@ def multi_protocol_menu():
     }, force_single=True, force_one_page=True)
 
 
+ONLINE_BRIDGE_SERVICE = "conecta-online-bridge.service"
+ONLINE_BRIDGE_DIR = INSTALL_DIR / "online-bridge"
+ONLINE_BRIDGE_BIN = ONLINE_BRIDGE_DIR / "conecta-online-bridge"
+ONLINE_BRIDGE_SOURCE = INSTALL_DIR / "source" / "cmd" / "conecta-online-bridge"
+
+
+def online_bridge_status():
+    enabled = subprocess.run(
+        ["systemctl", "is-enabled", ONLINE_BRIDGE_SERVICE],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 0
+    active = subprocess.run(
+        ["systemctl", "is-active", ONLINE_BRIDGE_SERVICE],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 0
+    configured = False
+    cfg_path = Path("/opt/myapp/config.json")
+    if cfg_path.is_file():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            configured = bool(str(cfg.get("api_token", "")).strip() and str(cfg.get("domain", "")).strip())
+        except (OSError, ValueError):
+            pass
+
+    print()
+    print("MÓDULO ONLINE WEB PRO")
+    print("  Servicio : " + ("ACTIVO" if active else "INACTIVO"))
+    print("  Arranque : " + ("AUTOMÁTICO" if enabled else "DESACTIVADO"))
+    print("  Panel    : " + ("CONFIGURADO" if configured else "NO CONFIGURADO"))
+    print("  Binario  : " + ("OK" if ONLINE_BRIDGE_BIN.is_file() else "NO INSTALADO"))
+    print()
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", ONLINE_BRIDGE_SERVICE, "-n", "1", "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        last = result.stdout.strip()
+        if last:
+            print("  Último evento:")
+            print("  " + last[-240:])
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def online_bridge_install_or_activate():
+    ONLINE_BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
+    source = ONLINE_BRIDGE_SOURCE / "main.go"
+    unit = ONLINE_BRIDGE_SOURCE / "conecta-online-bridge.service"
+
+    if not ONLINE_BRIDGE_BIN.is_file():
+        if not source.is_file():
+            raise CLIError("Fuente del módulo no encontrada. Actualiza ConectaSSH-PRO primero.")
+        tmp = ONLINE_BRIDGE_DIR / "conecta-online-bridge.tmp"
+        subprocess.run(
+            ["go", "build", "-trimpath", "-o", str(tmp), "./cmd/conecta-online-bridge"],
+            cwd=str(INSTALL_DIR / "source"), check=True,
+        )
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, ONLINE_BRIDGE_BIN)
+
+    if unit.is_file():
+        tmp_unit = Path("/etc/systemd/system/.conecta-online-bridge.service.tmp")
+        tmp_unit.write_text(unit.read_text(encoding="utf-8"), encoding="utf-8")
+        os.chmod(tmp_unit, 0o644)
+        os.replace(tmp_unit, Path("/etc/systemd/system/conecta-online-bridge.service"))
+
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "enable", "--now", ONLINE_BRIDGE_SERVICE], check=True)
+    print("MÓDULO ONLINE WEB PRO: ACTIVO Y CONFIGURADO.")
+
+
+def online_bridge_disable():
+    subprocess.run(["systemctl", "disable", "--now", ONLINE_BRIDGE_SERVICE], check=False)
+    print("MÓDULO ONLINE WEB PRO: DESACTIVADO.")
+
+
+def online_bridge_restart():
+    subprocess.run(["systemctl", "restart", ONLINE_BRIDGE_SERVICE], check=True)
+    print("MÓDULO ONLINE WEB PRO: REINICIADO.")
+
+
+def online_bridge_logs():
+    subprocess.run(
+        ["journalctl", "-u", ONLINE_BRIDGE_SERVICE, "-n", "50", "--no-pager"],
+        check=False,
+    )
+
+
+def online_bridge_menu():
+    menu("MÓDULO ONLINE WEB PRO", {
+        "1": ("Estado de la integración", online_bridge_status),
+        "2": ("Activar / instalar módulo", online_bridge_install_or_activate),
+        "3": ("Desactivar módulo", online_bridge_disable),
+        "4": ("Reiniciar módulo", online_bridge_restart),
+        "5": ("Ver últimos registros", online_bridge_logs),
+    }, force_single=True, force_one_page=True)
+
+
 def config_menu():
     menu("CONFIGURACIÓN", {
         "1": ("Configurar banner SSH", set_banner),
@@ -2305,6 +2403,7 @@ def main_menu_options():
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
         "7": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
+        "8": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
     }
