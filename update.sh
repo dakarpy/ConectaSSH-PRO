@@ -361,12 +361,12 @@ apply_update() {
 
   install -m 700 "$SOURCE_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
-  if [[ ( -e /usr/local/bin/menu || -L /usr/local/bin/menu ) && "$(readlink -f /usr/local/bin/menu 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
-    MENU_BACKUP="/usr/local/bin/menu.backup.$(date +%s%N)"
-    mv /usr/local/bin/menu "$MENU_BACKUP"
-    warn "  Previous menu command saved to $MENU_BACKUP"
+  if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
+    CONECTA_BACKUP="/usr/local/bin/conecta.backup.$(date +%s%N)"
+    mv /usr/local/bin/conecta "$CONECTA_BACKUP"
+    warn "  Previous conecta command saved to $CONECTA_BACKUP"
   fi
-  ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/menu
+  ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
 install -m 644 "$SOURCE_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
   info "  ConectaSSH-PRO CLI updated."
 

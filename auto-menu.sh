@@ -17,5 +17,5 @@ PY
 )
 [ "$AUTO_MENU" = "1" ] || return 0 2>/dev/null || exit 0
 export CONECTA_AUTO_MENU_RUNNING=1
-/usr/local/bin/menu
+/usr/local/bin/conecta
 unset CONECTA_AUTO_MENU_RUNNING

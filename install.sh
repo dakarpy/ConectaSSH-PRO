@@ -260,7 +260,7 @@ create_rollback_snapshot() {
   mkdir -p "$ROLLBACK_DIR/files"
   : > "$ROLLBACK_DIR/manifest"
   local path key
-  for path in /etc/fstab /etc/resolv.conf /etc/profile.d/go.sh /etc/profile.d/conecta-auto-menu.sh /etc/systemd/system/sshpanel.service /etc/systemd/system/sshpanel-dnstt-redirect.service /usr/local/sbin/sshpanel-dnstt-redirect.sh /usr/local/bin/menu /usr/local/bin/conectassh; do
+  for path in /etc/fstab /etc/resolv.conf /etc/profile.d/go.sh /etc/profile.d/conecta-auto-menu.sh /etc/systemd/system/sshpanel.service /etc/systemd/system/sshpanel-dnstt-redirect.service /usr/local/sbin/sshpanel-dnstt-redirect.sh /usr/local/bin/conecta /usr/local/bin/conectassh; do
     key="$(printf '%s' "$path" | sed 's#^/##; s#[/]#_#g')"
     if [[ -e "$path" || -L "$path" ]]; then
       printf 'EXISTS\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"
@@ -411,14 +411,14 @@ info "  Binary: $INSTALL_DIR/sshpanel"
 info "  Build commit: $BUILD_COMMIT ($BUILD_BRANCH)"
 install -m 700 "$SCRIPT_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
-if [[ ( -e /usr/local/bin/menu || -L /usr/local/bin/menu ) && "$(readlink -f /usr/local/bin/menu 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
-  MENU_BACKUP="/usr/local/bin/menu.backup.$(date +%s%N)"
-  mv /usr/local/bin/menu "$MENU_BACKUP"
-  warn "  Previous menu command saved to $MENU_BACKUP"
+if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
+  CONECTA_BACKUP="/usr/local/bin/conecta.backup.$(date +%s%N)"
+  mv /usr/local/bin/conecta "$CONECTA_BACKUP"
+  warn "  Previous conecta command saved to $CONECTA_BACKUP"
 fi
-ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/menu
+ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
 install -m 644 "$SCRIPT_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
-info "  ConectaSSH-PRO CLI installed: menu (also conectassh)"
+info "  ConectaSSH-PRO CLI installed: conecta (also conectassh)"
 mkdir -p "$INSTALL_DIR/source"
 rsync -a --delete --exclude '.git' --exclude 'source/' --exclude '__pycache__/' "$SCRIPT_DIR/" "$INSTALL_DIR/source/"
 
@@ -873,7 +873,7 @@ echo -e "  VLESS port   : 10086"
 echo -e "  VLESS UUID   : ${YELLOW}${UUID}${NC}"
 echo -e "  DNSTT DNS    : UDP 53 redirects to local UDP 5300"
 echo ""
-echo -e "  CLI menu     : ${YELLOW}menu${NC} (or sudo menu outside a root shell)"
+echo -e "  CLI conecta     : ${YELLOW}conecta${NC} (or sudo conecta outside a root shell)"
 echo -e "  API endpoint : ${YELLOW}http://127.0.0.1:9090${NC}"
 echo -e "  API password : ${YELLOW}${ADMIN_TOKEN}${NC}"
 echo -e "  API session login (integrations): admin / ${ADMIN_PASSWORD}"

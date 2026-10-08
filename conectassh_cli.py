@@ -117,7 +117,7 @@ class CLIError(Exception):
 
 def require_root():
     if os.geteuid() != 0:
-        raise CLIError("Ejecutá desde una sesión root (o usá sudo menu).")
+        raise CLIError("Ejecutá desde una sesión root (o usá sudo conecta).")
 
 
 def read_env():

@@ -1,6 +1,6 @@
 # ConectaSSH-PRO CLI
 
-ConectaSSH-PRO is an independent Linux server script with a terminal command menu and an HTTP API. It manages SSH accounts, native Xray clients and inbounds, connection protocols, TLS certificates, VPS traffic, and a Telegram sales bot. There is no web administration panel. Run the menu as root; it reads the local API credential and never asks the operator for a login or password. The menu is designed for mobile SSH terminals and shows live VPS status at the top.
+ConectaSSH-PRO is an independent Linux server script with a terminal command menu and an HTTP API. It manages SSH accounts, native Xray clients and inbounds, connection protocols, TLS certificates, VPS traffic, and a Telegram sales bot. There is no web administration panel. Run `conecta` as root; it reads the local API credential and never asks the operator for a login or password. The menu is designed for mobile SSH terminals and shows live VPS status at the top.
 
 ## Install
 
@@ -10,28 +10,28 @@ On a fresh Linux server with systemd, clone this repository and run the installe
 git clone https://github.com/dakarpy/ConectaSSH-PRO.git
 cd ConectaSSH-PRO
 sudo bash install.sh
-sudo menu
+sudo conecta
 ```
 
-The installer installs required packages, Go, PostgreSQL, Xray, the `sshpanel` systemd service, and the `menu` command. It generates service credentials and writes configuration under `/opt/sshpanel`. It needs network access for system packages, Go, and Xray. An extracted source archive can be installed with `sudo bash install.sh` from its root. If `/usr/local/bin/menu` already exists, the installer saves a timestamped backup before replacing it. Use a fresh server because installation creates new database and configuration credentials.
+The installer installs required packages, Go, PostgreSQL, Xray, the `sshpanel` systemd service, and the `conecta` command. It generates service credentials and writes configuration under `/opt/sshpanel`. It needs network access for system packages, Go, and Xray. An extracted source archive can be installed with `sudo bash install.sh` from its root. If `/usr/local/bin/conecta` already exists, the installer saves a timestamped backup before replacing it. Use a fresh server because installation creates new database and configuration credentials.
 
-Run `sudo menu` for the command menu. `sudo conectassh` is an alias for the same administration CLI. The header shows CPU, RAM, disk, uptime, network traffic, SSH and Xray activity, and service status. Each menu redraw clears the visible terminal; after a command prints results, press Enter to return to the menu. The menu adjusts to narrow terminals; `sudo menu --mobile` forces the compact layout, or set `CONECTASSH_COLUMNS=36`. Long menus have `n`/`p` page navigation. Configuration uses guided fields instead of opening a JSON editor.
+Run `sudo conecta` for the command menu. `sudo conectassh` is an alias for the same administration CLI. The header shows CPU, RAM, disk, uptime, network traffic, SSH and Xray activity, and service status. Each menu redraw clears the visible terminal; after a command prints results, press Enter to return to the menu. The menu adjusts to narrow terminals; `sudo conecta --mobile` forces the compact layout, or set `CONECTASSH_COLUMNS=36`. Long menus have `n`/`p` page navigation. Configuration uses guided fields instead of opening a JSON editor.
 
 | Command | Purpose |
 | --- | --- |
-| `sudo menu` | Interactive command menu |
-| `sudo menu status` | VPS and service status |
-| `sudo menu users` | SSH users |
-| `sudo menu logs` | Service logs |
-| `sudo menu update` | Update from the Git repository |
-| `sudo menu api-password show` | Reveal the local API password to root |
-| `sudo menu api-password change` | Generate, install, and verify a new API password |
+| `sudo conecta` | Interactive command menu |
+| `sudo conecta status` | VPS and service status |
+| `sudo conecta users` | SSH users |
+| `sudo conecta logs` | Service logs |
+| `sudo conecta update` | Update from the Git repository |
+| `sudo conecta api-password show` | Reveal the local API password to root |
+| `sudo conecta api-password change` | Generate, install, and verify a new API password |
 
 The CLI generates SSH account passwords and Xray UUIDs when creating them. It does not request any password from the person using the menu. API clients may supply credentials in their requests where an endpoint requires them. Reseller administration is handled in the Telegram bot; there is no reseller menu.
 
 ## Updates and files
 
-`sudo menu update` (or `sudo bash /opt/sshpanel/update.sh`) fetches the default branch from `https://github.com/dakarpy/ConectaSSH-PRO.git`, builds it, and restarts the service. Set `UPDATE_REF=branch-name` to choose a branch. From a local checkout or extracted source release, run `sudo env UPDATE_SOURCE=local bash update.sh`. The updater preserves the installed `.env`, `config.json`, `xray_config.json`, SSH keys, certificates, accounts, and PostgreSQL database. The previous binary is kept as `/opt/sshpanel/sshpanel.bak`.
+`sudo conecta update` (or `sudo bash /opt/sshpanel/update.sh`) fetches the default branch from `https://github.com/dakarpy/ConectaSSH-PRO.git`, builds it, and restarts the service. Set `UPDATE_REF=branch-name` to choose a branch. From a local checkout or extracted source release, run `sudo env UPDATE_SOURCE=local bash update.sh`. The updater preserves the installed `.env`, `config.json`, `xray_config.json`, SSH keys, certificates, accounts, and PostgreSQL database. The previous binary is kept as `/opt/sshpanel/sshpanel.bak`.
 
 | Location | Purpose |
 | --- | --- |
@@ -40,7 +40,7 @@ The CLI generates SSH account passwords and Xray UUIDs when creating them. It do
 | `/opt/sshpanel/xray_config.json` | Native Xray configuration |
 | `/opt/sshpanel/certs/` | Managed TLS certificates |
 | `/etc/systemd/system/sshpanel.service` | Service unit |
-| `/usr/local/bin/menu` | Terminal command |
+| `/usr/local/bin/conecta` | Terminal command |
 
 ## Menu features
 
@@ -54,12 +54,12 @@ The CLI generates SSH account passwords and Xray UUIDs when creating them. It do
 
 A fresh install binds the API to `http://127.0.0.1:9090` (`ADMIN_HTTP_ADDR` in `.env`). The root path has no browser UI. All request bodies below are JSON unless stated otherwise. Write operations ordinarily return JSON or an empty success response; errors use HTTP error status codes. Do not publish the HTTP listener openly: when remote API access is needed, place it behind TLS and restrict access.
 
-**Authentication:** `Authorization: Bearer <API password>` supplies the local superadmin credential (`ADMIN_TOKEN` in `.env`). Root can inspect or rotate it through `menu api-password`. Alternatively, `POST /api/auth/login` accepts an admin/reseller username and password and returns a session `token`; send it as `X-Session-Token: <token>`. Use `POST /api/auth/logout` with that header to revoke the session. In the tables, **session** means either a valid session token or the bearer API password; **admin** means superadmin only. A reseller session can use the permitted account APIs within its ownership and limits. The two public endpoints require neither header.
+**Authentication:** `Authorization: Bearer <API password>` supplies the local superadmin credential (`ADMIN_TOKEN` in `.env`). Root can inspect or rotate it through `conecta api-password`. Alternatively, `POST /api/auth/login` accepts an admin/reseller username and password and returns a session `token`; send it as `X-Session-Token: <token>`. Use `POST /api/auth/logout` with that header to revoke the session. In the tables, **session** means either a valid session token or the bearer API password; **admin** means superadmin only. A reseller session can use the permitted account APIs within its ownership and limits. The two public endpoints require neither header.
 
 For local shell use, avoid putting the secret directly in command history:
 
 ```bash
-TOKEN="$(sudo menu api-password show)"
+TOKEN="$(sudo conecta api-password show)"
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9090/api/users
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9090/api/xray/inbounds
 unset TOKEN
