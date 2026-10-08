@@ -283,8 +283,8 @@ def normalize_public_endpoints(value):
     return normalize_public_endpoint(value)
 
 
-def expiry(default=""):
-    raw = ask("Vencimiento (AAAA-MM-DD, días desde hoy o 'nunca')", default or "nunca")
+def expiry(default="", prompt="Vencimiento (AAAA-MM-DD, días desde hoy o 'nunca')"):
+    raw = ask(prompt, default or "nunca")
     if raw.lower() in ("never", "none", "nunca", "0"):
         return ""
     try:
@@ -480,21 +480,32 @@ def get_user(name):
 
 
 def create_user(default_days=30, test_hours=None):
-    name = ask("Usuario SSH").lower()
-    if not name:
-        raise CLIError("El usuario es obligatorio")
-    if get_user(name):
-        raise CLIError("El usuario ya existe; elegí Editar usuario SSH")
-    password = f"{secrets.randbelow(1000000):06d}"
-    expires_at = ((dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=test_hours)).isoformat(timespec="seconds")
-                  if test_hours else expiry(str(default_days)))
-    use_pam = ask("¿Usar autenticación PAM para este usuario? (sí/no)", "sí").lower() in ("sí", "si", "s", "yes", "y")
-    p = {"username": name, "password": password, "max_connections": number("Máximo de conexiones", 1, 0, 10000),
+    while True:
+        name = ask("NOMBRE DE USUARIO (mín. 4 caracteres)").lower()
+        if len(name) < 4:
+            print("❌ El usuario debe tener mínimo 4 caracteres.")
+            continue
+        if get_user(name):
+            raise CLIError("El usuario ya existe; elegí Editar usuario SSH")
+        break
+
+    while True:
+        password = ask("CONTRASEÑA (mín. 4 caracteres)")
+        if len(password) < 4:
+            print("❌ La contraseña debe tener mínimo 4 caracteres.")
+            continue
+        break
+
+    if test_hours:
+        expires_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=test_hours)).isoformat(timespec="seconds")
+    else:
+        expires_at = expiry(str(default_days), "Vencimiento (ejemplo 30)")
+
+    max_connections = number("LÍMITE DE CONEXIONES (ejemplo 1)", 1, 0, 10000)
+    p = {"username": name, "password": password, "max_connections": max_connections,
          "expires_at": expires_at, "limit_mbps_up": 0, "limit_mbps_down": 0,
          "data_quota_bytes": 0, "quota_action": "throttle", "quota_throttle_mbps": 10,
-         "use_pam": use_pam}
-    if use_pam:
-        print("Aviso: el usuario PAM debe existir como cuenta Linux válida en /etc/passwd y /etc/shadow.")
+         "use_pam": True}
     request("POST", "/api/users/create", p)
     expira = str(expires_at or "nunca")[:10]
     if expira and expira != "nunca":
@@ -502,10 +513,10 @@ def create_user(default_days=30, test_hours=None):
             expira = dt.datetime.fromisoformat(expira).strftime("%d/%m/%Y")
         except ValueError:
             pass
-    print("\n✅ ¡USUARIO CREADO CON ÉXITO!")
+    print("\n✅  ¡USUARIO CREADO CON ÉXITO!")
     print(f"👤 USUARIO: {name}")
     print(f"🔑 CONTRASEÑA: {password}")
-    print(f"📲 CONEXIÓN: {p["max_connections"]}")
+    print(f"📲 CONEXIÓN: {max_connections}")
     print(f"📆 VENCIMIENTO: {expira}")
 
 
