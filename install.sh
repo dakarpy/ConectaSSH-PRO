@@ -410,6 +410,7 @@ chmod 0600 "$INSTALL_DIR/.installed_repo_url"
 info "  Binary: $INSTALL_DIR/sshpanel"
 info "  Build commit: $BUILD_COMMIT ($BUILD_BRANCH)"
 install -m 700 "$SCRIPT_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
+install -m 700 "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
 if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
   CONECTA_BACKUP="/usr/local/bin/conecta.backup.$(date +%s%N)"
@@ -886,3 +887,23 @@ INSTALL_SUCCESS=true
 echo -e "${YELLOW}View/rotate the API password later with: sudo conectassh api-password show|change${NC}"
 echo ""
 "$SYSTEMCTL_BIN" status "$SERVICE_NAME" --no-pager -l || true
+
+# Ownership manifest consumed by the professional uninstaller. It intentionally
+# does not claim ownership of shared OS packages or pre-existing databases.
+cat > "$INSTALL_DIR/.conecta-install-manifest" <<EOF
+PRODUCT=ConectaSSH-PRO
+INSTALL_DIR=/opt/sshpanel
+DB_NAME=sshpanel
+DB_USER=sshpanel
+DB_CREATED_BY_CONECTA=0
+DB_ROLE_CREATED_BY_CONECTA=0
+RESOLVED_WAS_ACTIVE=0
+RESOLV_LINK_TARGET=
+RESOLV_BACKUP=
+FSTAB_TMPFS_ADDED=1
+UFW_53_ADDED=0
+FIREWALLD_53_ADDED=0
+CONECTA_BACKUP=${CONECTA_BACKUP:-}
+AUTO_MENU_BACKUP=${AUTO_MENU_BACKUP:-}
+EOF
+chmod 600 "$INSTALL_DIR/.conecta-install-manifest"

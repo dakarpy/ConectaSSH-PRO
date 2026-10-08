@@ -2579,6 +2579,26 @@ def online_bridge_menu():
     }, force_single=True, force_one_page=True)
 
 
+def uninstall_script():
+    require_root()
+    uninstall = INSTALL_DIR / "uninstall.sh"
+    if not uninstall.exists():
+        print("DESINSTALADOR PROFESIONAL NO DISPONIBLE EN ESTA INSTALACIÓN.")
+        print("Actualizá ConectaSSH-PRO antes de continuar.")
+        return
+    print("\n╔══════════════════════════════════════════════════════════╗")
+    print("║              DESINSTALAR CONECTASSH-PRO                 ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+    print("║ Se eliminarán únicamente componentes propios del panel. ║")
+    print("║ SSHPlus/Horizon, sshd, usuarios y servicios externos   ║")
+    print("║ NO serán modificados.                                   ║")
+    print("╚══════════════════════════════════════════════════════════╝")
+    confirm = input("\nEscribí DESINSTALAR para confirmar: ").strip()
+    if confirm != "DESINSTALAR":
+        print("Operación cancelada.")
+        return
+    subprocess.run(["bash", str(uninstall)], env={**os.environ, "CONFIRM": "YES"}, check=False)
+
 def config_menu():
     menu("CONFIGURACIÓN", {
         "1": ("Configurar banner SSH", set_banner),
@@ -2593,6 +2613,7 @@ def config_menu():
         "10": ("Reiniciar servicio", lambda: service_action("restart")),
         "11": ("ACTUALIZACIÓN DEL PANEL", update_menu),
         "12": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "13": ("DESINSTALAR SCRIPT", uninstall_script),
     }, force_single=True, force_one_page=True)
 
 
