@@ -516,7 +516,20 @@ def create_user(default_days=30, test_hours=None):
             except ValueError:
                 print("❌ Ingresá AAAA-MM-DD, cantidad de días o nunca.")
 
-    max_connections = number("CONEXIONES", 1, 0, 10000)
+    while True:
+        raw_connections = input("CONEXIONES: ").strip()
+        if not raw_connections:
+            max_connections = 1
+            break
+        try:
+            max_connections = int(raw_connections)
+        except ValueError:
+            print("❌ Las conexiones deben ser un número.")
+            continue
+        if not 0 <= max_connections <= 10000:
+            print("❌ Las conexiones deben estar entre 0 y 10000.")
+            continue
+        break
     p = {"username": name, "password": password, "max_connections": max_connections,
          "expires_at": expires_at, "limit_mbps_up": 0, "limit_mbps_down": 0,
          "data_quota_bytes": 0, "quota_action": "throttle", "quota_throttle_mbps": 10,
@@ -533,6 +546,59 @@ def create_user(default_days=30, test_hours=None):
     print(f"🔑 CONTRASEÑA: {password}")
     print(f"📲 CONEXIÓN: {max_connections}")
     print(f"📆 VENCIMIENTO: {expira}")
+
+def create_test_user():
+    print("\n[!] INFORME O TIEMPO EN MINUTOS EJEMPLO: 60")
+    while True:
+        raw_minutes = input("INFORME EL TIEMPO: ").strip()
+        if not raw_minutes:
+            minutes = 60
+            break
+        try:
+            minutes = int(raw_minutes)
+        except ValueError:
+            print("❌ Ingresá un número de minutos.")
+            continue
+        if minutes <= 0:
+            print("❌ El tiempo debe ser mayor que 0 minutos.")
+            continue
+        break
+
+    users = request("GET", "/api/users") or []
+    used_names = {str(u.get("username", "")).lower() for u in users}
+    used_passwords = {str(u.get("password", "")) for u in users if u.get("password")}
+
+    while True:
+        name = f"demo{secrets.randbelow(10000):04d}"
+        if name not in used_names:
+            break
+
+    while True:
+        password = f"{secrets.randbelow(1000000):06d}"
+        if password not in used_passwords:
+            break
+
+    expires_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    p = {
+        "username": name,
+        "password": password,
+        "max_connections": 1,
+        "expires_at": expires_at,
+        "limit_mbps_up": 0,
+        "limit_mbps_down": 0,
+        "data_quota_bytes": 0,
+        "quota_action": "throttle",
+        "quota_throttle_mbps": 10,
+        "use_pam": True,
+    }
+    request("POST", "/api/users/create", p)
+    expira = dt.datetime.fromisoformat(expires_at).strftime("%d/%m/%Y")
+    print("\n✅  ¡USUARIO DEMO CON ÉXITO!")
+    print(f"👤 USUARIO: {name}")
+    print(f"🔑 CONTRASEÑA: {password}")
+    print("📲 CONEXIÓN: 1")
+    print(f"📆 VENCIMIENTO: {expira}")
+
 
 def edit_user():
     name = ask("Usuario SSH").lower()
@@ -2136,7 +2202,7 @@ def ssh_menu():
     limit_state = "ACTIVO" if document.get("ssh_connection_limit_enabled", False) else "DESACTIVADO"
     menu("GESTOR DE USUARIOS SSH", {
         "1": ("Crear usuario", create_user),
-        "2": ("Crear prueba", lambda: create_user(test_hours=24)),
+        "2": ("Crear prueba", create_test_user),
         "3": ("Remover usuario", delete_user),
         "4": ("Renovar / editar usuario", edit_user),
         "5": ("Usuarios online", user_report),
