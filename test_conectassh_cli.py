@@ -387,37 +387,56 @@ class TokenManagementTest(unittest.TestCase):
 
 
 class AutoConfigurePreflightTest(unittest.TestCase):
-    def test_occupied_default_port_blocks_configuration_without_prompting(self):
-        occupied = SimpleNamespace(
-            returncode=0,
-            stdout='LISTEN 0 4096 *:80 *:* users:(("nginx",pid=4321,fd=7))\n',
-            stderr="",
-        )
-        free = SimpleNamespace(returncode=0, stdout="", stderr="")
-        responses = [occupied, free, free, free, free, free]
-        with patch.object(cli.subprocess, "run", side_effect=responses) as run:
-            with patch("builtins.input", side_effect=AssertionError("must not prompt")):
-                with redirect_stdout(io.StringIO()) as output:
-                    cli.auto_configure()
-        text = output.getvalue()
-        self.assertIn("TCP/80", text)
-        self.assertIn("OCUPADO por nginx (PID 4321)", text)
-        self.assertIn("NO SE PUEDE CONTINUAR", text)
-        self.assertIn("Libere los puertos marcados", text)
-        self.assertIn("No se realizaron cambios", text)
-        self.assertEqual(run.call_count, 6)
-        with patch.object(cli, "request", return_value={"auto_menu": False}):
-            self.assertIn("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
-            self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
+    def test_auto_configure_applies_requested_protocols_and_keeps_backup(self):
+        cfg = {
+            "listen": "disabled", "extra_listen": [], "users": [{"username": "keep"}],
+            "local_ssh_listen": "127.0.0.1:2222",
+            "xray": {"enabled": False, "mode": "native"},
+        }
+        report = {"applied": True, "services": {
+            "ssh": {"running": True, "listen": "0.0.0.0:80, 0.0.0.0:8080"},
+            "bhttp": {"running": True, "listen": "0.0.0.0:8080"},
+            "hcr": {"running": True, "listen": "0.0.0.0:8880"},
+            "udpgw": {"running": True, "listen": "0.0.0.0:7300"},
+            "xray": {"running": True},
+        }}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(cli, "INSTALL_DIR", Path(temp)), \
+                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), report]) as request, \
+                redirect_stdout(io.StringIO()) as output:
+            cli.auto_configure()
+            backups = list((Path(temp) / "backups").glob("auto-configure-*/server-config.json"))
+        payload = request.call_args_list[1].args[2]
+        self.assertEqual(payload["listen"], "0.0.0.0:80")
+        self.assertIn("0.0.0.0:8080", payload["extra_listen"])
+        self.assertEqual(payload["bhttp"]["shared_ports"], True)
+        self.assertEqual(payload["hcr"]["listen"], ["0.0.0.0:8880"])
+        self.assertEqual(payload["udpgw"]["listen"], "0.0.0.0:7300")
+        self.assertTrue(payload["xray"]["enabled"])
+        self.assertEqual(payload["xray"]["mode"], "native")
+        self.assertEqual(payload["users"], [{"username": "keep"}])
+        self.assertEqual(len(backups), 1, output.getvalue())
+        self.assertIn("¡Protocolos configurados y activos!", output.getvalue())
 
-    def test_free_ports_do_not_claim_activation_was_completed(self):
-        free = SimpleNamespace(returncode=0, stdout="", stderr="")
-        with patch.object(cli.subprocess, "run", return_value=free):
-            with redirect_stdout(io.StringIO()) as output:
-                cli.auto_configure()
-        self.assertIn("Todos los puertos están disponibles", output.getvalue())
-        self.assertIn("La activación no se ejecutó", output.getvalue())
-        self.assertIn("no abre puertos ni activa protocolos", output.getvalue())
+    def test_auto_configure_rolls_back_when_a_service_fails(self):
+        cfg = {"listen": "disabled", "extra_listen": [], "users": []}
+        failed = {"applied": True, "services": {
+            "ssh": {"running": True}, "bhttp": {"running": False, "error": "port busy"},
+            "hcr": {"running": True}, "udpgw": {"running": True}, "xray": {"running": True},
+        }}
+        restored = {"services": {}}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(cli, "INSTALL_DIR", Path(temp)), \
+                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), failed, restored]) as request, \
+                redirect_stdout(io.StringIO()) as output:
+            cli.auto_configure()
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(request.call_args_list[2].args[2], cfg)
+        self.assertIn("restauración de la configuración anterior", output.getvalue())
+        self.assertNotIn("¡Protocolos configurados y activos!", output.getvalue())
+
+    def test_main_menu_auto_configure_label_is_short(self):
+        self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
 
     def test_fresh_installer_keeps_public_protocols_disabled_and_does_not_take_over_dns(self):
         installer = Path(__file__).with_name("install.sh").read_text()

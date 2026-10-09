@@ -2746,59 +2746,133 @@ def checkuser_dual_menu():
 
 
 def auto_configure():
-    """Preflight seguro de puertos; no cambia servicios durante la verificación."""
+    """Back up current settings, enable the standard transports, and verify live health."""
     require_root()
-    ports = (
-        (80, "SSH WebSocket / BHTTP"),
-        (8080, "SSH WebSocket / BHTTP"),
-        (443, "TLS TUNNEL"),
-        (8880, "HCR"),
-        (7300, "UDPGW"),
-        (10086, "XRAY nativo"),
-    )
     print("\n╔══════════════════════════════════════════════╗")
-    print("║       AUTO CONFIGURAR · MODO SEGURO         ║")
+    print("║             AUTO CONFIGURAR                 ║")
     print("╚══════════════════════════════════════════════╝")
-    print("\nEsta opción solo verifica; no abre puertos ni activa protocolos.")
-    print("La API administrativa no se modifica.\n")
-    print("[1/3] Analizando servidor...")
-    print("[✓] Verificación iniciada")
+    print("Se guardará una copia antes de aplicar cambios.")
+    print("SSH administrativo del sistema (puerto 22) y usuarios no se modifican.\n")
 
-    print("\n[2/3] Verificando puertos...")
-    occupied = []
-    for port, protocol in ports:
-        result = subprocess.run(
-            ["ss", "-H", "-ltnp", f"sport = :{port}"],
-            capture_output=True, text=True, check=False,
-        )
-        if result.returncode != 0:
-            print("[✗] No se pudo verificar los puertos.")
-            print("No se realizaron cambios en el servidor.")
-            return
-        rows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if rows:
-            row = rows[0]
-            owner = "servicio existente"
-            if 'users:(("' in row:
-                owner = row.split('users:(("', 1)[1].split('"', 1)[0]
-                if "pid=" in row:
-                    pid = row.split("pid=", 1)[1].split(",", 1)[0].split(")", 1)[0]
-                    owner += f" (PID {pid})"
-            occupied.append((port, protocol, owner))
-            print(f"[✗] TCP/{port} · {protocol} · OCUPADO por {owner}")
-        else:
-            print(f"[✓] TCP/{port} · {protocol} · Disponible")
-
-    if occupied:
-        print("\nNO SE PUEDE CONTINUAR")
-        print("Libere los puertos marcados antes de continuar.")
-        print("Conecta no detendrá otros servicios.")
-        print("No se realizaron cambios en el servidor.")
+    try:
+        original = request("GET", "/api/server/config") or {}
+    except (CLIError, OSError, ValueError) as exc:
+        print(f"[✗] No se pudo leer la configuración actual: {exc}")
+        print("No se realizaron cambios.")
         return
 
-    print("\n[3/3] Puertos verificados.")
-    print("[✓] Todos los puertos están disponibles.")
-    print("La activación no se ejecutó; no se realizaron cambios.")
+    # Save a private local backup before touching runtime settings.
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_dir = INSTALL_DIR / "backups" / f"auto-configure-{stamp}"
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+        backup_file = backup_dir / "server-config.json"
+        fd = os.open(backup_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(original, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except OSError as exc:
+        print(f"[✗] No se pudo crear el backup: {exc}")
+        print("No se realizaron cambios.")
+        return
+
+    print(f"[✓] Backup: {backup_file}")
+    updated = copy.deepcopy(original)
+
+    # Preserve an existing main listener as an additional listener, unless it
+    # conflicts with one of the requested protocol ports. Port 22 is external
+    # sshd and is intentionally never edited here.
+    old_main = str(updated.get("listen") or "").strip()
+    old_port = _endpoint_port(old_main)
+    extras = list(updated.get("extra_listen") or [])
+    if old_main and old_port not in (80, 8080, 443, 8880, 7300, 10086) and old_main.lower() not in ("disabled", "off"):
+        extras.append(old_main)
+    extras = [str(item) for item in extras if _endpoint_port(item) not in (80, 8080, 8880, 7300, 10086)]
+    extras.append("0.0.0.0:8080")
+    # De-duplicate while preserving order and keep any unrelated extra listeners.
+    updated["extra_listen"] = list(dict.fromkeys(extras))
+    updated["listen"] = "0.0.0.0:80"
+
+    bhttp = copy.deepcopy(updated.get("bhttp") or {})
+    bhttp["listen"] = []
+    bhttp["shared_ports"] = True
+    updated["bhttp"] = bhttp
+
+    hcr = copy.deepcopy(updated.get("hcr") or {})
+    hcr["listen"] = ["0.0.0.0:8880"]
+    hcr["shared_ports"] = False
+    hcr.setdefault("engine", "official")
+    hcr.setdefault("transport", "plain")
+    hcr.setdefault("target", "127.0.0.1:2222")
+    updated["hcr"] = hcr
+
+    udpgw = copy.deepcopy(updated.get("udpgw") or {})
+    udpgw["listen"] = "0.0.0.0:7300"
+    updated["udpgw"] = udpgw
+
+    xray = copy.deepcopy(updated.get("xray") or {})
+    xray["enabled"] = True
+    xray["mode"] = "native"
+    xray["native"] = True
+    xray.setdefault("native_config_file", str(INSTALL_DIR / "xray_native_config.json"))
+    xray.setdefault("config_file", str(INSTALL_DIR / "xray_config.json"))
+    updated["xray"] = xray
+
+    # Use the existing TLS certificate only when it is present. Never create a
+    # fake/self-signed certificate or overwrite an existing TLS configuration.
+    tls = list(updated.get("tls_forwarders") or [])
+    valid_tls = next((entry for entry in tls
+                      if entry.get("cert_file") and entry.get("key_file")
+                      and Path(entry["cert_file"]).is_file()
+                      and Path(entry["key_file"]).is_file()), None)
+    if valid_tls and not any(_endpoint_port(entry.get("listen")) == 443 for entry in tls):
+        tls.append({"listen": "0.0.0.0:443", "cert_file": valid_tls["cert_file"], "key_file": valid_tls["key_file"]})
+        updated["tls_forwarders"] = tls
+
+    print("[1/3] Configurando WebSocket 80, BHTTP 8080, HCR 8880, UDPGW 7300 y Xray nativo...")
+    try:
+        report = request("POST", "/api/server/config", updated, timeout=120) or {}
+    except (CLIError, OSError, ValueError) as exc:
+        print(f"[✗] La API no pudo aplicar la configuración: {exc}")
+        print(f"Backup conservado en: {backup_file}")
+        return
+
+    services = report.get("services") or {}
+    required = ("ssh", "bhttp", "hcr", "udpgw", "xray")
+    failures = []
+    labels = {"ssh": "WebSocket SSH (80/8080)", "bhttp": "BHTTP (8080)",
+              "hcr": "HCR (8880)", "udpgw": "UDPGW (7300)", "xray": "Xray nativo"}
+    print("[2/3] Verificando servicios en ejecución...")
+    for name in required:
+        state = services.get(name)
+        if isinstance(state, dict) and state.get("running") is True:
+            print(f"[✓] {labels[name]} · ACTIVO" + (f" · {state['listen']}" if state.get("listen") else ""))
+        else:
+            detail = state.get("error") if isinstance(state, dict) else "la API no confirmó el estado"
+            failures.append((name, detail or "servicio no activo"))
+            print(f"[✗] {labels[name]} · NO CONFIRMADO · {detail or 'servicio no activo'}")
+
+    if failures:
+        print("[3/3] Falló la verificación; intentando restaurar la configuración anterior...")
+        try:
+            rollback = request("POST", "/api/server/config", original, timeout=120) or {}
+            print("[✓] Se solicitó la restauración de la configuración anterior.")
+            rollback_warnings = rollback.get("warnings") or []
+            for warning in rollback_warnings[:5]:
+                print_wrapped("Advertencia al restaurar: " + str(warning))
+        except (CLIError, OSError, ValueError) as exc:
+            print(f"[✗] No se pudo completar la restauración automática: {exc}")
+            print(f"Restauración manual: {backup_file}")
+        print("No se declara la configuración como exitosa. Revisá los errores anteriores.")
+        print(f"Backup conservado en: {backup_file}")
+        return
+
+    print("[3/3] ¡Protocolos configurados y activos!")
+    if not valid_tls:
+        print("[i] TLS 443 no se agregó: hace falta un certificado y una clave válidos.")
+    for warning in report.get("warnings") or []:
+        print_wrapped("Advertencia: " + str(warning))
+    print(f"Backup conservado en: {backup_file}")
 
 
 def main_menu_options():
