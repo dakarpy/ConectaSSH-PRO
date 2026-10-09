@@ -46,7 +46,8 @@ MAGENTA = "\033[35m"
 def paint(text, color, bold=False):
     if os.environ.get("NO_COLOR") or not sys.stdout.isatty():
         return str(text)
-    return f"{BOLD if bold else ""}{color}{text}{RESET}"
+    prefix = BOLD if bold else ""
+    return f"{prefix}{color}{text}{RESET}"
 
 
 def colorize_menu(lines):
