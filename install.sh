@@ -424,8 +424,13 @@ if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink 
   warn "  Previous conecta command saved to $CONECTA_BACKUP"
 fi
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
-install -m 644 "$SCRIPT_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
-info "  ConectaSSH-PRO CLI installed: conecta (also conectassh)"
+# Never replace /usr/local/bin/menu or auto-launch menus during SSH login.
+if [[ -f /etc/profile.d/conecta-auto-menu.sh ]]; then
+  mkdir -p "$INSTALL_DIR/compat-backups"
+  mv /etc/profile.d/conecta-auto-menu.sh "$INSTALL_DIR/compat-backups/conecta-auto-menu.sh.disabled.$(date +%s%N)"
+  warn "  Disabled the legacy automatic SSH-login menu hook."
+fi
+info "  ConectaSSH-PRO CLI installed: conecta (also conectassh); existing menu preserved."
 mkdir -p "$INSTALL_DIR/source"
 rsync -a --delete --exclude '.git' --exclude 'source/' --exclude '__pycache__/' "$SCRIPT_DIR/" "$INSTALL_DIR/source/"
 

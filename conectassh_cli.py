@@ -2191,7 +2191,8 @@ def toggle_server_bool(key, label):
 
 
 def auto_menu_toggle():
-    toggle_server_bool("auto_menu", "AUTO MENU")
+    print("AUTO MENU desactivado por seguridad: no se ejecutará ningún menú al iniciar SSH.")
+    print("Para abrir ConectaSSH-PRO manualmente, ejecutá: conectassh")
 
 
 def ssh_connection_limit_toggle():
@@ -2701,7 +2702,7 @@ def main_menu_options():
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
-        "7": (f"AUTO MENU: {'ACTIVO' if (request("GET", "/api/server/config") or {}).get("auto_menu", False) else 'DESACTIVADO'}", auto_menu_toggle),
+        "7": ("AUTO MENU: DESACTIVADO (SSH SEGURO)", auto_menu_toggle),
         "8": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
