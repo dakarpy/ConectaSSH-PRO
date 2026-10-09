@@ -3866,7 +3866,7 @@ func main() {
 	}
 
 	// Start public SSH listeners (listen + extra_listen).
-	publicAddrs := append([]string{cfg.Listen}, cfg.ExtraListen...)
+	publicAddrs := publicListenAddresses(cfg)
 	for _, e := range publicPool.Sync(publicAddrs) {
 		log.Printf("failed to start listener: %v", e)
 	}

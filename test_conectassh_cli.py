@@ -309,12 +309,35 @@ class TokenManagementTest(unittest.TestCase):
     def test_ssh_ports_accept_port_only_for_main_and_secondary(self):
         cfg = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"], "users": []}
         with patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), None]) as request, \
-                patch("builtins.input", side_effect=["443", "8081, 8082"]), \
+                patch.object(cli, "ask", return_value="443"), \
+                patch("builtins.input", side_effect=["8081, 8082"]), \
                 redirect_stdout(io.StringIO()):
             cli.set_ssh_ports()
         payload = request.call_args.args[2]
         self.assertEqual(payload["listen"], "0.0.0.0:443")
         self.assertEqual(payload["extra_listen"], ["0.0.0.0:8081", "0.0.0.0:8082"])
+
+    def test_ssh_main_port_can_be_disabled_without_disabling_extra_ports(self):
+        cfg = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"], "users": []}
+        with patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), None]) as request, \
+                patch.object(cli, "ask", return_value="-"), \
+                patch("builtins.input", side_effect=[""]), \
+                redirect_stdout(io.StringIO()):
+            cli.set_ssh_ports()
+        payload = request.call_args.args[2]
+        self.assertEqual(payload["listen"], "disabled")
+        self.assertEqual(payload["extra_listen"], ["0.0.0.0:8080"])
+
+    def test_ssh_main_port_can_be_reenabled(self):
+        cfg = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"], "users": []}
+        with patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), None]) as request, \
+                patch.object(cli, "ask", return_value="80"), \
+                patch("builtins.input", side_effect=[""]), \
+                redirect_stdout(io.StringIO()):
+            cli.set_ssh_ports()
+        payload = request.call_args.args[2]
+        self.assertEqual(payload["listen"], "0.0.0.0:80")
+        self.assertEqual(payload["extra_listen"], ["0.0.0.0:8080"])
 
     def test_git_update_uses_installed_updater_without_prompt(self):
         updater = Path(self.temp.name) / "update.sh"

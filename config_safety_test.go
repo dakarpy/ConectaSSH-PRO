@@ -62,3 +62,24 @@ func TestNormalizeDNSTTListenDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicListenAddressesOmitsDisabledMainAndKeepsOtherPorts(t *testing.T) {
+	cfg := &Config{Listen: disabledListen, ExtraListen: []string{"0.0.0.0:8080", "off", "0.0.0.0:8443"}}
+	got := publicListenAddresses(cfg)
+	want := []string{"0.0.0.0:8080", "0.0.0.0:8443"}
+	if len(got) != len(want) {
+		t.Fatalf("publicListenAddresses() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("publicListenAddresses() = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestPublicListenAddressesOmitsAllDisabledListeners(t *testing.T) {
+	cfg := &Config{Listen: "off", ExtraListen: []string{"disabled", ""}}
+	if got := publicListenAddresses(cfg); len(got) != 0 {
+		t.Fatalf("publicListenAddresses() = %#v, want no active listeners", got)
+	}
+}

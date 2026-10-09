@@ -89,7 +89,7 @@ func restartProxyHard(ctx context.Context, cfg *Config, grace time.Duration) {
 		return
 	}
 
-	publicAddrs := append([]string{cfg.Listen}, cfg.ExtraListen...)
+	publicAddrs := publicListenAddresses(cfg)
 	for attempt := 1; ; attempt++ {
 		errs := []error{}
 		if publicPool != nil {

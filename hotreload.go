@@ -375,16 +375,16 @@ func applyFullConfigReload(newCfg *Config) ConfigReloadReport {
 	}
 
 	// Public SSH listeners (main listen + extra_listen)
-	publicAddrs := append([]string{newCfg.Listen}, newCfg.ExtraListen...)
+	publicAddrs := publicListenAddresses(newCfg)
 	for _, e := range publicPool.Sync(publicAddrs) {
 		report.warnf("SSH listener error: %v", e)
 	}
 	report.Services["ssh"] = ServiceReloadStatus{
-		Enabled: true,
-		Running: publicPool.HasAll(publicAddrs),
+		Enabled: len(publicAddrs) > 0,
+		Running: len(publicAddrs) > 0 && publicPool.HasAll(publicAddrs),
 		Listen:  joinAddrs(publicAddrs),
 	}
-	if !report.Services["ssh"].Running {
+	if len(publicAddrs) > 0 && !report.Services["ssh"].Running {
 		report.Services["ssh"] = ServiceReloadStatus{Enabled: true, Running: false, Listen: joinAddrs(publicAddrs), Error: "one or more SSH listeners could not be opened"}
 	}
 

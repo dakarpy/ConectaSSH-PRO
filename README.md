@@ -48,7 +48,7 @@ The CLI generates SSH account passwords and Xray UUIDs when creating them. It do
 - **Xray:** manage inbounds and clients, generate UUIDs, adjust limits and quotas, reset traffic, edit JSON, control the service, and configure shared listener ports.
 - **Connection modes:** inspect SSH/TLS, DNSTT, BHTTP, BTUN, HCR, UDPGW, and Xray status, settings, and available logs; manage TLS certificates and DNSTT keys.
 - **VPS and traffic:** CPU, RAM, storage, uptime, per-interface traffic, daily/monthly totals, system logs, and update status.
-- **Configuration and service:** guided SSH, TLS, DNSTT, BHTTP, BTUN, HCR, UDPGW, Xray, and bot settings; managed server overview and settings; service controls and API password rotation. Existing remote server credentials can be retained while editing. Adding a remote server requires its credential through the authenticated API.
+- **Configuration and service:** guided SSH, TLS, DNSTT, BHTTP, BTUN, HCR, UDPGW, Xray, and bot settings; managed server overview and settings; service controls and API password rotation. Existing remote server credentials can be retained while editing. Adding a remote server requires its credential through the authenticated API. In `CONFIGURACIÓN → Cambiar puertos de escucha SSH`, enter `-` for the main SSH/HTTP listener to disable it while keeping additional ports active; enter a port number to re-enable/change it. Additional listeners can be cleared with `-`. Disabled listeners are persisted explicitly and are not silently rebound to port 80.
 
 ## HTTP API
 

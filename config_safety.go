@@ -69,6 +69,28 @@ func normalizeAutoRestartFields(interval, grace *string, label string, warn func
 	}
 }
 
+const disabledListen = "disabled"
+
+// publicListenAddresses returns only explicitly enabled public SSH listeners.
+// The sentinel "disabled" is persisted in config.json so an intentionally
+// disabled main listener is not mistaken for a missing legacy setting.
+func publicListenAddresses(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	addrs := make([]string, 0, 1+len(cfg.ExtraListen))
+	if addr := strings.TrimSpace(cfg.Listen); addr != "" && !strings.EqualFold(addr, disabledListen) && !strings.EqualFold(addr, "off") {
+		addrs = append(addrs, addr)
+	}
+	for _, addr := range cfg.ExtraListen {
+		addr = strings.TrimSpace(addr)
+		if addr != "" && !strings.EqualFold(addr, disabledListen) && !strings.EqualFold(addr, "off") {
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs
+}
+
 func normalizeRuntimePorts(cfg *Config) []string {
 	var warnings []string
 	warn := func(format string, args ...interface{}) {
@@ -81,34 +103,25 @@ func normalizeRuntimePorts(cfg *Config) []string {
 	if cfg.Listen == "" {
 		cfg.Listen = defaultMainListen
 	}
-	if err := tcpAddrAvailableForPool(cfg.Listen, publicPool); err != nil {
-		old := cfg.Listen
-		cfg.Listen = defaultMainListen
-		warn("main listener %s is unavailable (%v); using default %s", old, err, cfg.Listen)
-		if err2 := tcpAddrAvailableForPool(cfg.Listen, publicPool); err2 != nil {
-			warn("default main listener %s is also unavailable: %v", cfg.Listen, err2)
-		}
+	mainDisabled := strings.EqualFold(cfg.Listen, disabledListen) || strings.EqualFold(cfg.Listen, "off")
+	if mainDisabled {
+		cfg.Listen = disabledListen
+	} else if err := tcpAddrAvailableForPool(cfg.Listen, publicPool); err != nil {
+		warn("main listener %s is unavailable (%v); leaving it unchanged instead of switching ports automatically", cfg.Listen, err)
 	}
 
-	seen := map[string]bool{cfg.Listen: true}
+	seen := make(map[string]bool)
+	if !mainDisabled {
+		seen[cfg.Listen] = true
+	}
 	extra := make([]string, 0, len(cfg.ExtraListen))
 	for _, addr := range cfg.ExtraListen {
 		addr = strings.TrimSpace(addr)
-		if addr == "" || seen[addr] {
+		if addr == "" || strings.EqualFold(addr, disabledListen) || strings.EqualFold(addr, "off") || seen[addr] {
 			continue
 		}
 		if err := tcpAddrAvailableForPool(addr, publicPool); err != nil {
-			warn("extra listener %s is unavailable (%v)", addr, err)
-			fallback := defaultExtraListen
-			if !seen[fallback] {
-				if err2 := tcpAddrAvailableForPool(fallback, publicPool); err2 == nil {
-					extra = append(extra, fallback)
-					seen[fallback] = true
-					warn("extra listener fell back to default %s", fallback)
-				} else {
-					warn("default extra listener %s is also unavailable: %v", fallback, err2)
-				}
-			}
+			warn("extra listener %s is unavailable (%v); leaving it disabled instead of switching ports automatically", addr, err)
 			continue
 		}
 		extra = append(extra, addr)

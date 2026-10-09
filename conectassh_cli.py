@@ -695,7 +695,10 @@ def xray_shared_port():
     xray = server.get("xray") or {}
     if xray.get("mode", "native") == "external":
         raise CLIError("Los puertos compartidos requieren el modo emulador nativo de Xray")
-    listeners = [server.get("listen") or "0.0.0.0:80", *(server.get("extra_listen") or [])]
+    listeners = [addr for addr in [server.get("listen"), *(server.get("extra_listen") or [])]
+                 if addr and str(addr).lower() not in ("disabled", "off")]
+    if not listeners:
+        raise CLIError("No hay puertos SSH/HTTP públicos activos. Activá al menos uno antes de compartirlo con Xray.")
     tls_listeners = [entry.get("listen") for entry in server.get("tls_forwarders") or []]
     print_wrapped("SSH/HTTP público: " + ", ".join(listeners))
     if tls_listeners:
@@ -1671,15 +1674,23 @@ def set_banner():
 
 def set_ssh_ports():
     cfg = request("GET", "/api/server/config")
-    cfg["listen"] = normalize_public_endpoint(
-        ask("Puerto SSH principal", str(cfg.get("listen") or "0.0.0.0:80").rsplit(":", 1)[-1])
-    )
+    current_main = str(cfg.get("listen") or "0.0.0.0:80")
+    current_main = ("-" if current_main.lower() in ("disabled", "off") else
+                    current_main.rsplit(":", 1)[-1])
+    main = ask("Puerto SSH principal (número o - para DESACTIVAR)", current_main).strip()
+    if main == "-" or main.lower() in ("off", "disabled", "desactivar"):
+        cfg["listen"] = "disabled"
+    else:
+        cfg["listen"] = normalize_public_endpoint(main)
+
     current = ", ".join(str(item).rsplit(":", 1)[-1] for item in (cfg.get("extra_listen") or []))
-    extras = input(f"Puertos adicionales, separados por coma [{current}] (ingresá - para borrar): ").strip()
+    extras = input(f"Puertos adicionales, separados por coma [{current}] (ingresá - para borrar todos): ").strip()
     extras = "" if extras == "-" else (extras or current)
     cfg["extra_listen"] = normalize_public_endpoints([part.strip() for part in extras.split(",") if part.strip()])
     result = request("POST", "/api/server/config", cfg)
     print("Configuración de escuchas SSH aplicada.")
+    if cfg["listen"] == "disabled":
+        print("Puerto principal desactivado; los puertos adicionales configurados siguen disponibles.")
     if result:
         print(json.dumps(result, indent=2)[:2000])
 
@@ -1714,7 +1725,9 @@ def status():
 
 def connection_status():
     cfg = request("GET", "/api/server/config")
-    print_wrapped("SSH público: " + ", ".join([cfg.get("listen", "--"), *(cfg.get("extra_listen") or [])]))
+    public_listeners = [addr for addr in [cfg.get("listen"), *(cfg.get("extra_listen") or [])]
+                         if addr and str(addr).lower() not in ("disabled", "off")]
+    print_wrapped("SSH público: " + (", ".join(public_listeners) or "DESACTIVADO"))
     print_wrapped("SSH local: " + cfg.get("local_ssh_listen", "127.0.0.1:2222"))
     for listener in cfg.get("tls_forwarders") or []:
         print_wrapped("TLS SSH: " + listener.get("listen", "--"))
@@ -1778,7 +1791,10 @@ def connection_protocols_visual(show_return=True):
     cfg = request("GET", "/api/server/config") or {}
     def mark(enabled): return "◉" if enabled else "○"
     listen = cfg.get("listen") or "--"
-    extra = cfg.get("extra_listen") or []
+    if str(listen).lower() in ("disabled", "off"):
+        listen = "DESACTIVADO"
+    extra = [addr for addr in (cfg.get("extra_listen") or [])
+             if str(addr).lower() not in ("disabled", "off")]
     tls = cfg.get("tls_forwarders") or []
     blocks = [
         ("OPENSSH", listen, True),
