@@ -1188,9 +1188,80 @@ def tls_listener_menu():
     menu("ESCUCHAS TLS", options, force_single=True)
 
 
+def _endpoint_port(value):
+    text = str(value or "").strip()
+    if text.lower() in ("disabled", "off", "-"):
+        return None
+    try:
+        return int(text.rsplit(":", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def websocket_port80_status(document=None):
+    document = document if document is not None else (request("GET", "/api/server/config") or {})
+    main_is_80 = _endpoint_port(document.get("listen")) == 80
+    extra_is_80 = any(_endpoint_port(item) == 80 for item in (document.get("extra_listen") or []))
+    return main_is_80, extra_is_80
+
+
+def websocket_port80_activate():
+    document = request("GET", "/api/server/config") or {}
+    main_is_80, extra_is_80 = websocket_port80_status(document)
+    if main_is_80:
+        print("El puerto 80 ya está configurado como puerto principal.")
+        return
+    # Keep other listeners intact; remove only a duplicate port 80 from extras.
+    document["extra_listen"] = [item for item in (document.get("extra_listen") or [])
+                                if _endpoint_port(item) != 80]
+    document["listen"] = "0.0.0.0:80"
+    save_settings("/api/server/config", document)
+    print("Solicitud de activación del puerto 80 enviada a ConectaSSH-PRO.")
+    print("Si otro servicio ocupa el puerto, no se detendrá; revisá las advertencias anteriores.")
+
+
+def websocket_port80_deactivate():
+    document = request("GET", "/api/server/config") or {}
+    main_is_80, extra_is_80 = websocket_port80_status(document)
+    if not main_is_80 and not extra_is_80:
+        print("El puerto 80 ya está desactivado en la configuración de ConectaSSH-PRO.")
+        return
+    if main_is_80:
+        document["listen"] = "disabled"
+    # Remove port 80 from additional listeners too, preserving all other ports.
+    document["extra_listen"] = [item for item in (document.get("extra_listen") or [])
+                                if _endpoint_port(item) != 80]
+    save_settings("/api/server/config", document)
+    print("Solicitud de desactivación del puerto 80 enviada a ConectaSSH-PRO.")
+    print("Los demás puertos configurados se conservan.")
+
+
+def websocket_port80_show_status():
+    document = request("GET", "/api/server/config") or {}
+    main_is_80, extra_is_80 = websocket_port80_status(document)
+    if main_is_80:
+        status = "ACTIVO como puerto principal"
+    elif extra_is_80:
+        status = "ACTIVO como puerto adicional"
+    else:
+        status = "DESACTIVADO en ConectaSSH-PRO"
+    print("Puerto 80: " + status)
+    print("Puerto principal configurado:", document.get("listen") or "--")
+    print("Puertos adicionales:", ", ".join(document.get("extra_listen") or []) or "--")
+
+
+def websocket_menu():
+    menu("WEBSOCKET", {
+        "1": ("Configuración WebSocket SSH", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
+        "2": ("ACTIVAR PUERTO 80", websocket_port80_activate),
+        "3": ("DESACTIVAR PUERTO 80", websocket_port80_deactivate),
+        "4": ("ESTADO DEL PUERTO 80", websocket_port80_show_status),
+    }, force_single=True, force_one_page=True)
+
+
 def server_settings_menu():
     options = {
-        "1": ("WEBSOCKET", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
+        "1": ("WEBSOCKET", websocket_menu),
         "2": ("TLS TUNNEL", tls_listener_menu),
         "3": ("DNSTT", lambda: block_menu("dnstt")),
         "4": ("BHTTP", lambda: block_menu("bhttp")),

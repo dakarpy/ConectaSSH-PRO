@@ -17,6 +17,34 @@ cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 
 
+class WebsocketPort80MenuTest(unittest.TestCase):
+    def test_activate_port80_preserves_other_extra_listeners(self):
+        config = {"listen": "0.0.0.0:443", "extra_listen": ["0.0.0.0:8080", "0.0.0.0:80"]}
+        with patch.object(cli, "request", return_value=config), patch.object(cli, "save_settings") as save:
+            with redirect_stdout(io.StringIO()):
+                cli.websocket_port80_activate()
+        saved = save.call_args.args[1]
+        self.assertEqual(saved["listen"], "0.0.0.0:80")
+        self.assertEqual(saved["extra_listen"], ["0.0.0.0:8080"])
+
+    def test_deactivate_main_port80_preserves_8080(self):
+        config = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]}
+        with patch.object(cli, "request", return_value=config), patch.object(cli, "save_settings") as save:
+            with redirect_stdout(io.StringIO()):
+                cli.websocket_port80_deactivate()
+        saved = save.call_args.args[1]
+        self.assertEqual(saved["listen"], "disabled")
+        self.assertEqual(saved["extra_listen"], ["0.0.0.0:8080"])
+
+    def test_websocket_menu_exposes_activate_deactivate_and_status(self):
+        with patch.object(cli, "menu") as menu:
+            cli.websocket_menu()
+        options = menu.call_args.args[1]
+        self.assertIn("ACTIVAR PUERTO 80", options["2"][0])
+        self.assertIn("DESACTIVAR PUERTO 80", options["3"][0])
+        self.assertIn("ESTADO DEL PUERTO 80", options["4"][0])
+
+
 class TokenManagementTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
