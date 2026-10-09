@@ -2814,7 +2814,7 @@ def main_menu_options():
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
         "11": ("BANNER SSH", banner_menu),
-        "12": ("AUTO CONFIGURAR · VERIFICACIÓN SEGURA", auto_configure),
+        "12": ("AUTO CONFIGURAR", auto_configure),
         "13": ("CHECKUSER DUAL", checkuser_dual_menu),
     }
 

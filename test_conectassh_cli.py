@@ -408,7 +408,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertEqual(run.call_count, 6)
         with patch.object(cli, "request", return_value={"auto_menu": False}):
             self.assertIn("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
-            self.assertIn("VERIFICACIÓN SEGURA", cli.main_menu_options()["12"][0])
+            self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
 
     def test_free_ports_do_not_claim_activation_was_completed(self):
         free = SimpleNamespace(returncode=0, stdout="", stderr="")
