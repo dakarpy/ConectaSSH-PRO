@@ -2308,8 +2308,16 @@ def toggle_server_bool(key, label):
 
 
 def auto_menu_toggle():
-    print("AUTO MENU desactivado por seguridad: no se ejecutará ningún menú al iniciar SSH.")
-    print("Para abrir ConectaSSH-PRO manualmente, ejecutá: conectassh")
+    document = request("GET", "/api/server/config") or {}
+    current = bool(document.get("auto_menu", False))
+    document["auto_menu"] = not current
+    save_settings("/api/server/config", document)
+    state = "ACTIVADO" if not current else "DESACTIVADO"
+    print(f"AUTO MENU: {state}.")
+    if not current:
+        print("ConectaSSH-PRO se abrirá automáticamente al iniciar una sesión SSH interactiva como root.")
+    else:
+        print("El inicio de sesión SSH volverá a la consola normal.")
 
 
 def ssh_connection_limit_toggle():
@@ -2878,6 +2886,11 @@ def auto_configure():
 
 
 def main_menu_options():
+    try:
+        auto_menu_enabled = bool((request("GET", "/api/server/config") or {}).get("auto_menu", False))
+    except CLIError:
+        auto_menu_enabled = False
+    auto_menu_label = "AUTO MENU: ACTIVADO" if auto_menu_enabled else "AUTO MENU: DESACTIVADO"
     return {
         "1": ("GESTOR DE USUARIOS SSH", ssh_menu),
         "2": ("GESTOR XRAY", xray_menu),
@@ -2885,7 +2898,7 @@ def main_menu_options():
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
-        "7": ("AUTO MENU: DESACTIVADO (SSH SEGURO)", auto_menu_toggle),
+        "7": (auto_menu_label, auto_menu_toggle),
         "8": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),

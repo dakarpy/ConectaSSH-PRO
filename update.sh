@@ -381,11 +381,9 @@ apply_update() {
     fi
   fi
 
-  # Disable old login hook without deleting it; keep it for audit/recovery.
-  if [[ -f /etc/profile.d/conecta-auto-menu.sh ]]; then
-    mkdir -p "$INSTALL_DIR/compat-backups"
-    mv /etc/profile.d/conecta-auto-menu.sh "$INSTALL_DIR/compat-backups/conecta-auto-menu.sh.disabled.$(date +%s%N)"
-    warn "  Disabled the legacy automatic SSH-login menu hook."
+  # Install the controlled login hook; actual launch remains governed by auto_menu.
+  if [[ -f "$SOURCE_DIR/auto-menu.sh" ]]; then
+    install -m 0644 "$SOURCE_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
   fi
   info "  ConectaSSH-PRO CLI updated as conecta; existing menu preserved."
 
@@ -429,8 +427,8 @@ except Exception as e:
     print(f"[!] Could not parse {path}: {e}")
     sys.exit(0)
 changed = False
-# Automatic menus on SSH login are intentionally disabled to protect admin shells.
-if d.get('auto_menu') is not False:
+# Preserve the operator's AUTO MENU choice across updates.
+if 'auto_menu' not in d:
     d['auto_menu'] = False
     changed = True
 if 'banner_file' not in d:
