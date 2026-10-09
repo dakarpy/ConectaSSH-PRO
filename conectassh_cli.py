@@ -1136,9 +1136,10 @@ def select_certificate():
 
 
 def tls_listener_add():
-    cfg = request("GET", "/api/server/config")
-    listen = normalize_public_endpoint(ask("Puerto TLS", "443"))
+    # El certificado debe existir y seleccionarse antes de pedir/abrir el puerto.
     cert, key = select_certificate()
+    cfg = request("GET", "/api/server/config")
+    listen = normalize_public_endpoint(ask("Puerto TLS que vas a abrir", "443"))
     listeners = cfg.get("tls_forwarders") or []
     listeners.append({"listen": listen, "cert_file": cert, "key_file": key})
     cfg["tls_forwarders"] = listeners
@@ -1177,11 +1178,22 @@ def tls_listener_field(index, field):
     save_settings("/api/server/config", cfg)
 
 
+def tls_certificate_menu():
+    menu("GENERAR CERTIFICADO TLS", {
+        "1": ("Let's Encrypt (certificado válido para dominio público)",
+              lambda: generate_tls_certificate(True)),
+        "2": ("Autofirmado (pruebas o uso interno)", generate_tls_certificate),
+    }, force_single=True, force_one_page=True)
+
+
 def tls_listener_menu():
     def options():
         listeners = (request("GET", "/api/server/config") or {}).get("tls_forwarders") or []
-        result = {"1": ("Agregar escucha TLS", tls_listener_add)}
-        result.update({str(index + 2): (listener.get("listen", "Escucha TLS"),
+        result = {
+            "1": ("GENERAR UN CERTIFICADO", tls_certificate_menu),
+            "2": ("ABRIR UN PUERTO TLS", tls_listener_add),
+        }
+        result.update({str(index + 3): (listener.get("listen", "Escucha TLS"),
                                          lambda i=index: tls_listener_edit(i))
                        for index, listener in enumerate(listeners)})
         return result
