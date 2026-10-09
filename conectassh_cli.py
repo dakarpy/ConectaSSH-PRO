@@ -2746,25 +2746,14 @@ def checkuser_dual_menu():
 
 
 def auto_configure():
-    """Back up current settings, enable the standard transports, and verify live health."""
+    """Back up current settings, enable standard non-TLS transports, and verify health."""
     require_root()
     print("\n╔══════════════════════════════════════════════╗")
     print("║             AUTO CONFIGURAR                 ║")
     print("╚══════════════════════════════════════════════╝")
     print("Se guardará una copia antes de aplicar cambios.")
-    print("TLS Tunnel usará el puerto 443 y un certificado Let's Encrypt.")
-    print("El dominio debe apuntar a esta VPS y TCP/80 debe ser accesible para validar el certificado.")
+    print("Esta opción NO configura ni modifica TLS Tunnel/443.")
     print("SSH administrativo del sistema (puerto 22) y usuarios no se modifican.\n")
-    domain = ask("DOMINIO TLS (ej. vpn.tudominio.com)").strip().lower().rstrip(".")
-    email = ask("EMAIL PARA LET'S ENCRYPT").strip()
-    import re
-    if (not domain or len(domain) > 253 or not re.fullmatch(
-            r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain)):
-        print("[✗] Dominio DNS inválido. No se realizaron cambios.")
-        return
-    if not email or "@" not in email or any(ch.isspace() for ch in email):
-        print("[✗] Email inválido. No se realizaron cambios.")
-        return
 
     try:
         original = request("GET", "/api/server/config") or {}
@@ -2773,7 +2762,6 @@ def auto_configure():
         print("No se realizaron cambios.")
         return
 
-    # Save a private local backup before touching runtime settings.
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_dir = INSTALL_DIR / "backups" / f"auto-configure-{stamp}"
     try:
@@ -2787,62 +2775,19 @@ def auto_configure():
         print(f"[✗] No se pudo crear el backup: {exc}")
         print("No se realizaron cambios.")
         return
-
     print(f"[✓] Backup: {backup_file}")
 
-    # Let's Encrypt uses standalone HTTP validation. Temporarily release port 80
-    # from this panel only; restore the exact original configuration if issuance
-    # fails. SSH admin on port 22 is untouched.
-    original_listen = str(original.get("listen") or "").strip()
-    original_extras = list(original.get("extra_listen") or [])
-    port80_was_configured = (_endpoint_port(original_listen) == 80 or
-                             any(_endpoint_port(item) == 80 for item in original_extras))
-    if port80_was_configured:
-        temporary = copy.deepcopy(original)
-        if _endpoint_port(temporary.get("listen")) == 80:
-            temporary["listen"] = "disabled"
-        temporary["extra_listen"] = [item for item in (temporary.get("extra_listen") or [])
-                                      if _endpoint_port(item) != 80]
-        try:
-            request("POST", "/api/server/config", temporary, timeout=120)
-        except (CLIError, OSError, ValueError) as exc:
-            print(f"[✗] No se pudo liberar temporalmente TCP/80: {exc}")
-            print("No se solicitó el certificado ni se continuó con la configuración.")
-            print(f"Backup conservado en: {backup_file}")
-            return
-
-    print(f"[1/4] Solicitando certificado Let's Encrypt para {domain}...")
-    try:
-        certificate = request("POST", "/api/tls/letsencrypt",
-                              {"domain": domain, "email": email}, timeout=300) or {}
-        cert_file = str(certificate.get("cert_file") or "")
-        key_file = str(certificate.get("key_file") or "")
-        if not cert_file or not key_file:
-            raise CLIError("la API no devolvió las rutas del certificado y la clave")
-    except (CLIError, OSError, ValueError) as exc:
-        print(f"[✗] No se pudo emitir el certificado: {exc}")
-        try:
-            request("POST", "/api/server/config", original, timeout=120)
-            print("[✓] Configuración original restaurada.")
-        except (CLIError, OSError, ValueError) as restore_exc:
-            print(f"[✗] Error restaurando configuración: {restore_exc}")
-            print(f"Restauración manual: {backup_file}")
-        print("Verificá que el dominio apunte a esta VPS y que TCP/80 esté accesible.")
-        return
-
     updated = copy.deepcopy(original)
-
-    # Preserve an existing main listener as an additional listener, unless it
-    # conflicts with one of the requested protocol ports. Port 22 is external
-    # sshd and is intentionally never edited here.
     old_main = str(updated.get("listen") or "").strip()
     old_port = _endpoint_port(old_main)
     extras = list(updated.get("extra_listen") or [])
-    if old_main and old_port not in (80, 8080, 443, 8880, 7300, 10086) and old_main.lower() not in ("disabled", "off"):
+    # Keep unrelated listeners (including an existing 443 listener); only
+    # reserve the ports explicitly managed by this non-TLS auto-configuration.
+    managed_ports = (80, 8080, 8880, 7300, 10086)
+    if old_main and old_port not in managed_ports and old_main.lower() not in ("disabled", "off"):
         extras.append(old_main)
-    extras = [str(item) for item in extras if _endpoint_port(item) not in (80, 8080, 8880, 7300, 10086)]
+    extras = [str(item) for item in extras if _endpoint_port(item) not in managed_ports]
     extras.append("0.0.0.0:8080")
-    # De-duplicate while preserving order and keep any unrelated extra listeners.
     updated["extra_listen"] = list(dict.fromkeys(extras))
     updated["listen"] = "0.0.0.0:80"
 
@@ -2871,28 +2816,26 @@ def auto_configure():
     xray.setdefault("config_file", str(INSTALL_DIR / "xray_config.json"))
     updated["xray"] = xray
 
-    # Configure the requested domain certificate on TCP/443, preserving TLS
-    # listeners on other ports.
-    tls = [entry for entry in (updated.get("tls_forwarders") or [])
-           if _endpoint_port(entry.get("listen")) != 443]
-    tls.append({"listen": "0.0.0.0:443", "cert_file": cert_file, "key_file": key_file})
-    updated["tls_forwarders"] = tls
-
-    print("[2/4] Configurando WebSocket 80, BHTTP 8080, HCR 8880, UDPGW 7300, Xray nativo y TLS 443...")
+    print("[1/3] Configurando WebSocket 80, BHTTP 8080, HCR 8880, UDPGW 7300 y Xray nativo (TLS excluido)...")
     try:
         report = request("POST", "/api/server/config", updated, timeout=120) or {}
     except (CLIError, OSError, ValueError) as exc:
-        print(f"[✗] La API no pudo aplicar la configuración: {exc}")
-        print(f"Backup conservado en: {backup_file}")
+        print(f"[✗] No se pudo aplicar la configuración: {exc}")
+        print("Se intentará restaurar la configuración anterior.")
+        try:
+            request("POST", "/api/server/config", original, timeout=120)
+            print("[✓] Configuración original restaurada.")
+        except (CLIError, OSError, ValueError) as restore_exc:
+            print(f"[✗] No se pudo restaurar automáticamente: {restore_exc}")
+            print(f"Restauración manual: {backup_file}")
         return
 
     services = report.get("services") or {}
-    required = ("ssh", "bhttp", "hcr", "udpgw", "xray", "tls")
-    failures = []
+    required = ("ssh", "bhttp", "hcr", "udpgw", "xray")
     labels = {"ssh": "WebSocket SSH (80/8080)", "bhttp": "BHTTP (8080)",
-              "hcr": "HCR (8880)", "udpgw": "UDPGW (7300)", "xray": "Xray nativo",
-              "tls": f"TLS Tunnel ({domain}:443)"}
-    print("[3/4] Verificando servicios en ejecución...")
+              "hcr": "HCR (8880)", "udpgw": "UDPGW (7300)", "xray": "Xray nativo"}
+    failures = []
+    print("[2/3] Verificando servicios en ejecución...")
     for name in required:
         state = services.get(name)
         if isinstance(state, dict) and state.get("running") is True:
@@ -2903,12 +2846,11 @@ def auto_configure():
             print(f"[✗] {labels[name]} · NO CONFIRMADO · {detail or 'servicio no activo'}")
 
     if failures:
-        print("[4/4] Falló la verificación; intentando restaurar la configuración anterior...")
+        print("[3/3] Falló la verificación; restaurando la configuración anterior...")
         try:
             rollback = request("POST", "/api/server/config", original, timeout=120) or {}
             print("[✓] Se solicitó la restauración de la configuración anterior.")
-            rollback_warnings = rollback.get("warnings") or []
-            for warning in rollback_warnings[:5]:
+            for warning in (rollback.get("warnings") or [])[:5]:
                 print_wrapped("Advertencia al restaurar: " + str(warning))
         except (CLIError, OSError, ValueError) as exc:
             print(f"[✗] No se pudo completar la restauración automática: {exc}")
@@ -2917,7 +2859,7 @@ def auto_configure():
         print(f"Backup conservado en: {backup_file}")
         return
 
-    print(f"[4/4] ¡Protocolos configurados y activos! TLS Tunnel: {domain}:443")
+    print("[3/3] ¡Protocolos configurados y activos! TLS Tunnel quedó fuera de esta operación.")
     for warning in report.get("warnings") or []:
         print_wrapped("Advertencia: " + str(warning))
     print(f"Backup conservado en: {backup_file}")
