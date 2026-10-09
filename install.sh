@@ -713,15 +713,15 @@ SERVER_IP=$(curl -sf --max-time 5 https://checkip.amazonaws.com 2>/dev/null \
 # config.json
 cat > "$INSTALL_DIR/config.json" <<EOF
 {
-  "listen": "0.0.0.0:80",
-  "extra_listen": ["0.0.0.0:8080"],
+  "listen": "disabled",
+  "extra_listen": [],
   "local_ssh_listen": "127.0.0.1:2222",
   "host_key_file": "${INSTALL_DIR}/ssh_host_rsa_key",
   "quiet": false,
   "pam_auth_enabled": true,
   "banner_file": "${INSTALL_DIR}/banner.txt",
   "xray": {
-    "enabled": true,
+    "enabled": false,
     "mode": "native",
     "native": true,
     "bin_path": "${INSTALL_DIR}/xray",
@@ -772,87 +772,19 @@ cp -f "$INSTALL_DIR/xray_native_config.json" "$INSTALL_DIR/xray_config.json"
 chmod 600 "$INSTALL_DIR/xray_native_config.json" "$INSTALL_DIR/xray_config.json"
 info "  VLESS UUID: ${UUID}"
 
-# ── 9. DNSTT DNS/53 redirect ─────────────────────────────────────────────────
-info "[9/10] Configuring DNSTT DNS redirect (UDP 53 -> 5300)…"
-cat > /usr/local/sbin/sshpanel-dnstt-redirect.sh <<'EOS'
-#!/bin/bash
-set -euo pipefail
-DNS_UPSTREAM="${DNS_UPSTREAM:-1.1.1.1}"
-DNSTT_PORT="${DNSTT_PORT:-5300}"
-
-# Never take over UDP 53 if another service already owns it.
-# The installer must continue without stopping, killing, disabling, or reconfiguring that service.
-if command -v ss >/dev/null 2>&1 && ss -H -lun "( sport = :53 )" 2>/dev/null | grep -q .; then
-  echo "WARNING: UDP 53 is occupied; Conecta leaves it untouched and skips the DNSTT redirect." >&2
-  exit 0
-fi
-
-# UDP 53 is free, so Conecta may configure its DNSTT redirect.
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl disable --now systemd-resolved.service >/dev/null 2>&1 || true
-fi
-rm -f /etc/resolv.conf
-printf 'nameserver %s\n' "$DNS_UPSTREAM" > /etc/resolv.conf
-
-# Open DNS/UDP in common Linux firewalls when they are active.
-if command -v ufw >/dev/null 2>&1; then
-  ufw allow 53/udp >/dev/null 2>&1 || true
-fi
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port=53/udp >/dev/null 2>&1 || true
-  firewall-cmd --reload >/dev/null 2>&1 || true
-fi
-
-add_iptables_rule() {
-  local bin="$1" chain="$2"
-  "$bin" -t nat -C "$chain" -p udp --dport 53 -j REDIRECT --to-ports "$DNSTT_PORT" 2>/dev/null \
-    || "$bin" -t nat -A "$chain" -p udp --dport 53 -j REDIRECT --to-ports "$DNSTT_PORT"
-}
-
-if command -v iptables >/dev/null 2>&1; then
-  add_iptables_rule iptables PREROUTING
-fi
-
-if command -v ip6tables >/dev/null 2>&1; then
-  add_iptables_rule ip6tables PREROUTING || true
-fi
-
-# Fallback for minimal systems where only nft is present.
-if ! command -v iptables >/dev/null 2>&1 && command -v nft >/dev/null 2>&1; then
-  nft add table inet sshpanel_nat 2>/dev/null || true
-  nft 'add chain inet sshpanel_nat prerouting { type nat hook prerouting priority dstnat; policy accept; }' 2>/dev/null || true
-  nft list chain inet sshpanel_nat prerouting 2>/dev/null | grep -q "udp dport 53 redirect to :$DNSTT_PORT" \
-    || nft add rule inet sshpanel_nat prerouting udp dport 53 redirect to :"$DNSTT_PORT"
-fi
-EOS
-chmod +x /usr/local/sbin/sshpanel-dnstt-redirect.sh
-
-cat > /etc/systemd/system/sshpanel-dnstt-redirect.service <<'EOF'
-[Unit]
-Description=SSH Panel DNSTT DNS redirect (UDP 53 to 5300)
-After=network.target
-Before=sshpanel.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/sshpanel-dnstt-redirect.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-"$SYSTEMCTL_BIN" daemon-reload
-"$SYSTEMCTL_BIN" enable --now sshpanel-dnstt-redirect.service || warn "DNSTT DNS redirect service failed; check: journalctl -u sshpanel-dnstt-redirect -e"
-info "  DNSTT DNS redirect installed: UDP 53 -> 5300"
+# ── 9. Optional protocols stay disabled by default ──────────────────────────
+# Do not take over system DNS, alter /etc/resolv.conf, add firewall rules,
+# install NAT redirects, or enable protocol listeners during a fresh install.
+# DNSTT and other protocols can be configured explicitly from the CLI later.
+info "[9/10] Public protocols remain disabled until explicitly configured."
 
 # ── 10. Systemd service ──────────────────────────────────────────────────────
 info "[10/10] Creating systemd service '${SERVICE_NAME}'…"
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=SSH Panel + Xray-core Server
-After=local-fs.target network.target postgresql.service sshpanel-dnstt-redirect.service
-Wants=postgresql.service sshpanel-dnstt-redirect.service
+After=local-fs.target network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
@@ -886,11 +818,10 @@ echo -e "${GREEN}   Installation complete!                  ${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo ""
 echo -e "  Server IP    : ${YELLOW}${SERVER_IP}${NC}"
-echo -e "  SSH ports    : 80, 8080  (HTTP-injected SSH)"
-echo -e "  Internal SSH : 127.0.0.1:2222  (raw SSH for local proxies)"
-echo -e "  VLESS port   : 10086"
-echo -e "  VLESS UUID   : ${YELLOW}${UUID}${NC}"
-echo -e "  DNSTT DNS    : UDP 53 redirects to local UDP 5300"
+echo -e "  Public protocols : disabled by default"
+echo -e "  Internal SSH     : 127.0.0.1:2222  (loopback only)"
+echo -e "  Xray/DNSTT       : not activated automatically"
+echo -e "  Configure ports  : run conecta → AUTO CONFIGURAR / MODO DE CONEXIÓN"
 echo ""
 echo -e "  CLI conecta     : ${YELLOW}conecta${NC} (or sudo conecta outside a root shell)"
 echo -e "  API endpoint : ${YELLOW}http://127.0.0.1:9090${NC}"

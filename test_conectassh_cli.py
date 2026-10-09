@@ -36,13 +36,21 @@ class WebsocketPort80MenuTest(unittest.TestCase):
         self.assertEqual(saved["listen"], "disabled")
         self.assertEqual(saved["extra_listen"], ["0.0.0.0:8080"])
 
-    def test_websocket_menu_exposes_activate_deactivate_and_status(self):
-        with patch.object(cli, "menu") as menu:
-            cli.websocket_menu()
-        options = menu.call_args.args[1]
+    def test_websocket_menu_exposes_live_status_and_manual_controls(self):
+        config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
+        with patch.object(cli, "request", return_value=config):
+            options = cli.websocket_menu_options()
+        self.assertIn("Configuración WebSocket SSH", options["1"][0])
         self.assertIn("ACTIVAR PUERTO 80", options["2"][0])
+        self.assertIn("DESACTIVADO", options["2"][0])
         self.assertIn("DESACTIVAR PUERTO 80", options["3"][0])
-        self.assertIn("ESTADO DEL PUERTO 80", options["4"][0])
+        self.assertIn("ESTADO REAL", options["4"][0])
+
+    def test_websocket_menu_status_failure_does_not_hide_controls(self):
+        with patch.object(cli, "request", side_effect=cli.CLIError("API unavailable")):
+            options = cli.websocket_menu_options()
+        self.assertIn("ESTADO NO DISPONIBLE", options["2"][0])
+        self.assertIn("ACTIVAR PUERTO 80", options["2"][0])
 
 
 class TokenManagementTest(unittest.TestCase):
@@ -400,6 +408,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertEqual(run.call_count, 6)
         with patch.object(cli, "request", return_value={"auto_menu": False}):
             self.assertIn("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
+            self.assertIn("VERIFICACIÓN SEGURA", cli.main_menu_options()["12"][0])
 
     def test_free_ports_do_not_claim_activation_was_completed(self):
         free = SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -408,6 +417,17 @@ class AutoConfigurePreflightTest(unittest.TestCase):
                 cli.auto_configure()
         self.assertIn("Todos los puertos están disponibles", output.getvalue())
         self.assertIn("La activación no se ejecutó", output.getvalue())
+        self.assertIn("no abre puertos ni activa protocolos", output.getvalue())
+
+    def test_fresh_installer_keeps_public_protocols_disabled_and_does_not_take_over_dns(self):
+        installer = Path(__file__).with_name("install.sh").read_text()
+        self.assertIn('"listen": "disabled"', installer)
+        self.assertIn('"extra_listen": []', installer)
+        self.assertIn('"enabled": false', installer)
+        self.assertIn("Public protocols remain disabled", installer)
+        self.assertNotIn("systemctl disable --now systemd-resolved.service", installer)
+        self.assertNotIn('ufw allow 53/udp', installer)
+        self.assertNotIn('nft add rule inet sshpanel_nat', installer)
 
 
 if __name__ == "__main__":

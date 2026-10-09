@@ -1250,13 +1250,30 @@ def websocket_port80_show_status():
     print("Puertos adicionales:", ", ".join(document.get("extra_listen") or []) or "--")
 
 
-def websocket_menu():
-    menu("WEBSOCKET", {
+def websocket_menu_options():
+    """Build a live WebSocket menu without changing any listener by itself."""
+    try:
+        document = request("GET", "/api/server/config") or {}
+        main_is_80, extra_is_80 = websocket_port80_status(document)
+        if main_is_80:
+            state = "ACTIVO · PRINCIPAL"
+        elif extra_is_80:
+            state = "ACTIVO · ADICIONAL"
+        else:
+            state = "DESACTIVADO"
+    except (CLIError, OSError, ValueError, json.JSONDecodeError):
+        state = "ESTADO NO DISPONIBLE"
+    return {
         "1": ("Configuración WebSocket SSH", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
-        "2": ("ACTIVAR PUERTO 80", websocket_port80_activate),
-        "3": ("DESACTIVAR PUERTO 80", websocket_port80_deactivate),
-        "4": ("ESTADO DEL PUERTO 80", websocket_port80_show_status),
-    }, force_single=True, force_one_page=True)
+        "2": (f"ACTIVAR PUERTO 80 · {state}", websocket_port80_activate),
+        "3": (f"DESACTIVAR PUERTO 80 · {state}", websocket_port80_deactivate),
+        "4": ("ESTADO REAL DE CONFIGURACIÓN", websocket_port80_show_status),
+    }
+
+
+def websocket_menu():
+    menu("WEBSOCKET SSH · ACTIVACIÓN MANUAL", websocket_menu_options,
+         force_single=True, force_one_page=True)
 
 
 def server_settings_menu():
@@ -2739,10 +2756,12 @@ def auto_configure():
         (7300, "UDPGW"),
         (10086, "XRAY nativo"),
     )
-    print("\n╔══════════════════════════════════════╗")
-    print("║          AUTO CONFIGURAR             ║")
-    print("╚══════════════════════════════════════╝")
-    print("\n[1/3] Analizando servidor...")
+    print("\n╔══════════════════════════════════════════════╗")
+    print("║       AUTO CONFIGURAR · MODO SEGURO         ║")
+    print("╚══════════════════════════════════════════════╝")
+    print("\nEsta opción solo verifica; no abre puertos ni activa protocolos.")
+    print("La API administrativa no se modifica.\n")
+    print("[1/3] Analizando servidor...")
     print("[✓] Verificación iniciada")
 
     print("\n[2/3] Verificando puertos...")
@@ -2795,7 +2814,7 @@ def main_menu_options():
         "9": ("OPTIMIZAR", optimize_vps),
         "10": ("CONFIGURACIÓN", config_menu),
         "11": ("BANNER SSH", banner_menu),
-        "12": ("AUTO CONFIGURAR", auto_configure),
+        "12": ("AUTO CONFIGURAR · VERIFICACIÓN SEGURA", auto_configure),
         "13": ("CHECKUSER DUAL", checkuser_dual_menu),
     }
 
