@@ -393,20 +393,25 @@ class AutoConfigurePreflightTest(unittest.TestCase):
             "local_ssh_listen": "127.0.0.1:2222",
             "xray": {"enabled": False, "mode": "native"},
         }
+        cert = {"cert_file": "/etc/letsencrypt/live/vpn.example.com/fullchain.pem",
+                "key_file": "/etc/letsencrypt/live/vpn.example.com/privkey.pem"}
         report = {"applied": True, "services": {
             "ssh": {"running": True, "listen": "0.0.0.0:80, 0.0.0.0:8080"},
             "bhttp": {"running": True, "listen": "0.0.0.0:8080"},
             "hcr": {"running": True, "listen": "0.0.0.0:8880"},
             "udpgw": {"running": True, "listen": "0.0.0.0:7300"},
-            "xray": {"running": True},
+            "xray": {"running": True}, "tls": {"running": True, "listen": "0.0.0.0:443"},
         }}
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(cli, "INSTALL_DIR", Path(temp)), \
-                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), report]) as request, \
+                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), cert, report]) as request, \
+                patch("builtins.input", side_effect=["vpn.example.com", "ops@example.com"]), \
                 redirect_stdout(io.StringIO()) as output:
             cli.auto_configure()
             backups = list((Path(temp) / "backups").glob("auto-configure-*/server-config.json"))
-        payload = request.call_args_list[1].args[2]
+        self.assertEqual(request.call_args_list[1].args[1], "/api/tls/letsencrypt")
+        self.assertEqual(request.call_args_list[1].args[2], {"domain": "vpn.example.com", "email": "ops@example.com"})
+        payload = request.call_args_list[2].args[2]
         self.assertEqual(payload["listen"], "0.0.0.0:80")
         self.assertIn("0.0.0.0:8080", payload["extra_listen"])
         self.assertEqual(payload["bhttp"]["shared_ports"], True)
@@ -414,24 +419,29 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertEqual(payload["udpgw"]["listen"], "0.0.0.0:7300")
         self.assertTrue(payload["xray"]["enabled"])
         self.assertEqual(payload["xray"]["mode"], "native")
+        self.assertEqual(payload["tls_forwarders"], [{"listen": "0.0.0.0:443", "cert_file": cert["cert_file"], "key_file": cert["key_file"]}])
         self.assertEqual(payload["users"], [{"username": "keep"}])
         self.assertEqual(len(backups), 1, output.getvalue())
-        self.assertIn("¡Protocolos configurados y activos!", output.getvalue())
+        self.assertIn("¡Protocolos configurados y activos! TLS Tunnel: vpn.example.com:443", output.getvalue())
 
     def test_auto_configure_rolls_back_when_a_service_fails(self):
         cfg = {"listen": "disabled", "extra_listen": [], "users": []}
+        cert = {"cert_file": "/etc/letsencrypt/live/vpn.example.com/fullchain.pem",
+                "key_file": "/etc/letsencrypt/live/vpn.example.com/privkey.pem"}
         failed = {"applied": True, "services": {
             "ssh": {"running": True}, "bhttp": {"running": False, "error": "port busy"},
             "hcr": {"running": True}, "udpgw": {"running": True}, "xray": {"running": True},
+            "tls": {"running": True},
         }}
         restored = {"services": {}}
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(cli, "INSTALL_DIR", Path(temp)), \
-                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), failed, restored]) as request, \
+                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), cert, failed, restored]) as request, \
+                patch("builtins.input", side_effect=["vpn.example.com", "ops@example.com"]), \
                 redirect_stdout(io.StringIO()) as output:
             cli.auto_configure()
-        self.assertEqual(request.call_count, 3)
-        self.assertEqual(request.call_args_list[2].args[2], cfg)
+        self.assertEqual(request.call_count, 4)
+        self.assertEqual(request.call_args_list[3].args[2], cfg)
         self.assertIn("restauración de la configuración anterior", output.getvalue())
         self.assertNotIn("¡Protocolos configurados y activos!", output.getvalue())
 
