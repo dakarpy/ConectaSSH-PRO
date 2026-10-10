@@ -17,37 +17,6 @@ cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 
 
-class AutoMenuHookTest(unittest.TestCase):
-    def test_enable_installs_root_only_ssh_hook_atomically(self):
-        with tempfile.TemporaryDirectory() as directory:
-            hook = Path(directory) / "conecta-auto-menu.sh"
-            with patch.object(cli, "AUTO_MENU_HOOK", hook):
-                cli.sync_auto_menu_hook(True)
-            content = hook.read_text()
-            self.assertIn(cli.AUTO_MENU_MARKER, content)
-            self.assertIn('"$(id -u 2>/dev/null)" = "0"', content)
-            self.assertIn('SSH_CONNECTION', content)
-            self.assertIn('[ -t 0 ] && [ -t 1 ]', content)
-            self.assertEqual(hook.stat().st_mode & 0o777, 0o644)
-
-    def test_disable_removes_only_managed_hook(self):
-        with tempfile.TemporaryDirectory() as directory:
-            hook = Path(directory) / "conecta-auto-menu.sh"
-            hook.write_text(cli.AUTO_MENU_MARKER + "\n")
-            with patch.object(cli, "AUTO_MENU_HOOK", hook):
-                cli.sync_auto_menu_hook(False)
-            self.assertFalse(hook.exists())
-
-    def test_enable_does_not_overwrite_unrelated_profile_script(self):
-        with tempfile.TemporaryDirectory() as directory:
-            hook = Path(directory) / "conecta-auto-menu.sh"
-            hook.write_text("# unrelated administrator profile hook\n")
-            with patch.object(cli, "AUTO_MENU_HOOK", hook):
-                with self.assertRaises(cli.CLIError):
-                    cli.sync_auto_menu_hook(True)
-            self.assertEqual(hook.read_text(), "# unrelated administrator profile hook\n")
-
-
 class PublicSSHHTTPDisplayTest(unittest.TestCase):
     def test_display_only_shows_ports_configured_public_and_actually_listening(self):
         config = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]}
@@ -180,7 +149,7 @@ class TokenManagementTest(unittest.TestCase):
         self.assertIn("Xray: 3 conectados", header)
         self.assertIn("18.50 Mbps", header)
         self.assertEqual(len({len(row) for row in header.splitlines()}), 1)
-        with patch.object(cli, "request", return_value={"auto_menu": False}):
+        with patch.object(cli, "request", return_value={}):
             menu_text = cli.render_menu(
                 "MAIN MENU", cli.main_menu_options(), status
             )
@@ -297,7 +266,7 @@ class TokenManagementTest(unittest.TestCase):
                 self.assertTrue(cli.check_for_update())
 
     def test_user_backup_menu_is_unique_and_points_to_conecta_backup_flow(self):
-        with patch.object(cli, "request", return_value={"auto_menu": False}):
+        with patch.object(cli, "request", return_value={}):
             self.assertIs(cli.main_menu_options()["6"][1], cli.user_backup_menu)
         self.assertEqual(cli.user_backup_menu.__code__.co_filename, str(MODULE))
 
@@ -565,7 +534,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertIn("No se modificó la configuración", output.getvalue())
 
     def test_main_menu_auto_configure_label_is_short(self):
-        self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
+        self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["11"][0])
 
     def test_fresh_installer_keeps_public_protocols_disabled_and_does_not_take_over_dns(self):
         installer = Path(__file__).with_name("install.sh").read_text()

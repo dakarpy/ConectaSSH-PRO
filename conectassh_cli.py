@@ -2530,78 +2530,6 @@ def toggle_server_bool(key, label):
 
 
 
-AUTO_MENU_HOOK = Path("/etc/profile.d/conecta-auto-menu.sh")
-AUTO_MENU_MARKER = "# Managed by ConectaSSH-PRO AUTO MENU; do not edit."
-
-
-def sync_auto_menu_hook(enabled):
-    """Install/remove only our root-SSH login hook; never edit sshd or restart SSH."""
-    hook = AUTO_MENU_HOOK
-    if enabled:
-        lines = [
-            AUTO_MENU_MARKER,
-            "# Only launch the administrator CLI for an interactive root SSH login.",
-            'case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac',
-            '[ "$(id -u 2>/dev/null)" = "0" ] || return 0 2>/dev/null || exit 0',
-            '[ -n "${SSH_CONNECTION:-}" ] || return 0 2>/dev/null || exit 0',
-            '[ -t 0 ] && [ -t 1 ] || return 0 2>/dev/null || exit 0',
-            '[ "${CONECTA_AUTO_MENU_RUNNING:-0}" = "1" ] && return 0 2>/dev/null || exit 0',
-            '[ -r /opt/sshpanel/auto-menu.sh ] || return 0 2>/dev/null || exit 0',
-            '. /opt/sshpanel/auto-menu.sh',
-            '',
-        ]
-        content = "\n".join(lines)
-        try:
-            hook.parent.mkdir(parents=True, exist_ok=True)
-            if hook.exists() and AUTO_MENU_MARKER not in hook.read_text(errors="replace"):
-                raise CLIError(f"No se modifica {hook}: existe un archivo ajeno a ConectaSSH-PRO.")
-            fd, temp_name = tempfile.mkstemp(prefix=".conecta-auto-menu.", dir=str(hook.parent))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(content)
-                os.chmod(temp_name, 0o644)
-                os.replace(temp_name, hook)
-            finally:
-                try:
-                    os.unlink(temp_name)
-                except FileNotFoundError:
-                    pass
-        except OSError as exc:
-            raise CLIError(f"No se pudo activar AUTO MENU: {exc}") from exc
-    else:
-        try:
-            if hook.exists():
-                if AUTO_MENU_MARKER not in hook.read_text(errors="replace"):
-                    raise CLIError(f"No se elimina {hook}: existe un archivo ajeno a ConectaSSH-PRO.")
-                hook.unlink()
-        except OSError as exc:
-            raise CLIError(f"No se pudo desactivar AUTO MENU: {exc}") from exc
-
-
-def auto_menu_toggle():
-    document = request("GET", "/api/server/config") or {}
-    current = bool(document.get("auto_menu", False))
-    target = not current
-    document["auto_menu"] = target
-    save_settings("/api/server/config", document)
-    try:
-        sync_auto_menu_hook(target)
-    except CLIError:
-        document["auto_menu"] = current
-        try:
-            save_settings("/api/server/config", document)
-        except CLIError:
-            pass
-        raise
-    state = "ACTIVADO" if target else "DESACTIVADO"
-    print(f"AUTO MENU: {state}.")
-    if target:
-        print("Se abrirá al iniciar una sesión SSH interactiva como root. No afecta a usuarios SSH clientes ni modifica el puerto 22.")
-        print("Cerrá y volvé a abrir la sesión SSH para probarlo.")
-    else:
-        print("El inicio de sesión SSH volverá a la consola normal.")
-
-
 def ssh_connection_limit_toggle():
     toggle_server_bool("ssh_connection_limit_enabled", "LIMITADOR SSH")
 
@@ -3220,11 +3148,6 @@ def auto_configure():
 
 
 def main_menu_options():
-    try:
-        auto_menu_enabled = bool((request("GET", "/api/server/config") or {}).get("auto_menu", False))
-    except CLIError:
-        auto_menu_enabled = False
-    auto_menu_label = "AUTO MENU: ACTIVADO" if auto_menu_enabled else "AUTO MENU: DESACTIVADO"
     return {
         "1": ("GESTOR DE USUARIOS SSH", ssh_menu),
         "2": ("GESTOR XRAY", xray_menu),
@@ -3232,13 +3155,12 @@ def main_menu_options():
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
-        "7": (auto_menu_label, auto_menu_toggle),
-        "8": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
-        "9": ("OPTIMIZAR", optimize_vps),
-        "10": ("CONFIGURACIÓN", config_menu),
-        "11": ("BANNER SSH", banner_menu),
-        "12": ("AUTO CONFIGURAR", auto_configure),
-        "13": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "7": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
+        "8": ("OPTIMIZAR", optimize_vps),
+        "9": ("CONFIGURACIÓN", config_menu),
+        "10": ("BANNER SSH", banner_menu),
+        "11": ("AUTO CONFIGURAR", auto_configure),
+        "12": ("CHECKUSER DUAL", checkuser_dual_menu),
     }
 
 

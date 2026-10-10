@@ -129,7 +129,6 @@ done
 # Second pass verifies uninstall did not leave a managed login hook behind.
 cleanup_auto_menu_hook
 
-[[ -n "$AUTO_MENU_BACKUP" && -f "$AUTO_MENU_BACKUP" ]] && rm -f "$AUTO_MENU_BACKUP" || true
 [[ -n "$RESOLV_BACKUP" && -f "$RESOLV_BACKUP" ]] && rm -f "$RESOLV_BACKUP" || true
 systemctl daemon-reload >/dev/null 2>&1 || true
 info "ConectaSSH-PRO desinstalado. Componentes externos y paquetes compartidos conservados."

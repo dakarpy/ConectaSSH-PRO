@@ -9,7 +9,7 @@ The Go executable embeds the install and uninstall entry points and can be built
 - Install: `sudo ./conecta-ssh-pro-linux-amd64 -install`
 - Uninstall: `sudo ./conecta-ssh-pro-linux-amd64 -uninstall`
 
-The uninstaller removes product-owned services, payload, symlinks, managed AUTO MENU hooks, and the product log tmpfs mount. It intentionally preserves PostgreSQL account data and SSH users, shared OS dependencies, and unrecognized files/services. If ownership cannot be proven, it stops instead of deleting unrelated data. After a successful uninstall, run the same bootstrap binary again with `-install`.
+The uninstaller removes product-owned services, payload, symlinks, recognized legacy Conecta login hooks, and the product log tmpfs mount. It intentionally preserves PostgreSQL account data and SSH users, shared OS dependencies, and unrecognized files/services. If ownership cannot be proven, it stops instead of deleting unrelated data. After a successful uninstall, run the same bootstrap binary again with `-install`.
 
 ## Install
 
@@ -22,7 +22,7 @@ sudo bash install.sh
 sudo conecta
 ```
 
-The installer installs required packages, Go, PostgreSQL, Xray, the `sshpanel` systemd service, and the `conecta` command. It generates service credentials and writes configuration under `/opt/sshpanel`. It needs network access for system packages, Go, and Xray. An extracted source archive can be installed with `sudo bash install.sh` from its root. If `/usr/local/bin/conecta` already exists, the installer saves a timestamped backup before replacing it. It never replaces the generic `/usr/local/bin/menu` command. AUTO MENU is opt-in and disabled on a fresh install; when enabled from option [07], it launches the administrator CLI only for interactive root SSH logins. The hook never changes sshd configuration or restarts SSH, and updates preserve the saved AUTO MENU choice. Legacy hooks from older releases are backed up under `/opt/sshpanel/compat-backups/`. Use a fresh server because installation creates new database and configuration credentials; preflight checks stop before installation if required ports are occupied.
+The installer installs required packages, Go, PostgreSQL, Xray, the `sshpanel` systemd service, and the `conecta` command. It generates service credentials and writes configuration under `/opt/sshpanel`. It needs network access for system packages, Go, and Xray. An extracted source archive can be installed with `sudo bash install.sh` from its root. If `/usr/local/bin/conecta` already exists, the installer saves a timestamped backup before replacing it. It never replaces the generic `/usr/local/bin/menu` command. Automatic menu-on-login has been removed. SSH logins always open a normal shell; launch the CLI manually with `conecta`. Installer and updater remove recognized legacy Conecta login hooks. Use a fresh server because installation creates new database and configuration credentials; preflight checks stop before installation if required ports are occupied.
 
 Run `sudo conecta` for the command menu. `sudo conectassh` is an alias for the same administration CLI. The header shows CPU, RAM, disk, uptime, network traffic, SSH and Xray activity, and service status. Each menu redraw clears the visible terminal; after a command prints results, press Enter to return to the menu. The menu adjusts to narrow terminals; `sudo conecta --mobile` forces the compact layout, or set `CONECTASSH_COLUMNS=36`. Long menus have `n`/`p` page navigation. Configuration uses guided fields instead of opening a JSON editor.
 

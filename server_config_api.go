@@ -108,7 +108,6 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 	// running service, while an explicit null is the panel disabling it.
 	var fieldPresence struct {
 		PAMAuthEnabled            *bool `json:"pam_auth_enabled"`
-		AutoMenu                  *bool `json:"auto_menu"`
 		SSHConnectionLimitEnabled *bool `json:"ssh_connection_limit_enabled"`
 	}
 	if err := json.Unmarshal(body, &fieldPresence); err != nil {
@@ -144,9 +143,6 @@ func serverConfigPost(w http.ResponseWriter, r *http.Request) {
 		newCfg.Users = globalCfg.Users
 		if fieldPresence.PAMAuthEnabled == nil {
 			newCfg.PAMAuthEnabled = globalCfg.PAMAuthEnabled
-		}
-		if fieldPresence.AutoMenu == nil {
-			newCfg.AutoMenu = globalCfg.AutoMenu
 		}
 		if fieldPresence.SSHConnectionLimitEnabled == nil {
 			newCfg.SSHConnectionLimitEnabled = globalCfg.SSHConnectionLimitEnabled

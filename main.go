@@ -101,9 +101,6 @@ type Config struct {
 	BannerEnabled bool   `json:"banner_enabled"`
 
 	UserCount bool `json:"user_count"`
-	// AutoMenu enables the administration menu automatically for root interactive shells.
-	AutoMenu bool `json:"auto_menu"`
-
 	// SSHConnectionLimitEnabled controls the per-user max_connections enforcement.
 	// The account value remains available for display/check APIs even when disabled.
 	SSHConnectionLimitEnabled bool `json:"ssh_connection_limit_enabled"`

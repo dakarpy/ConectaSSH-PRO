@@ -91,34 +91,20 @@ ssh_safety_preflight
 
 # Retire legacy login hooks immediately, before fetching/building/stopping services.
 # This also protects installations where a prior release left the hook behind.
-# Disable legacy login hook left by older releases. Never overwrite a backup.
-disable_legacy_login_hook() {
+# Remove the recognized legacy Conecta login hook; automatic login menus are unsupported.
+remove_legacy_login_hook() {
   local hook="/etc/profile.d/conecta-auto-menu.sh"
-  local backup_dir="$INSTALL_DIR/compat-backups"
-  local backup
-  if [[ ! -e "$hook" && ! -L "$hook" ]]; then
-    return 0
+  [[ -e "$hook" || -L "$hook" ]] || return 0
+  if grep -qE 'conecta|sshpanel|auto_menu|CONECTA_AUTO_MENU_RUNNING' "$hook" 2>/dev/null; then
+    rm -f -- "$hook"
+    info "  Removed legacy Conecta SSH login hook."
+  else
+    warn "  Unrecognized file at $hook; preserved."
   fi
-  # Keep the current managed hook in place until the update transaction succeeds.
-  # If the update fails, the user's enabled AUTO MENU therefore keeps working.
-  if grep -Fq '# Managed by ConectaSSH-PRO AUTO MENU; do not edit.' "$hook" 2>/dev/null; then
-    return 0
-  fi
-  # Only move our known legacy Conecta hook; do not touch unrelated profile scripts.
-  if ! grep -qE 'conecta|sshpanel|auto_menu' "$hook" 2>/dev/null; then
-    warn "  Found $hook but its contents are not recognized; leaving it untouched."
-    return 0
-  fi
-  mkdir -p "$backup_dir"
-  chmod 0700 "$backup_dir"
-  backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
-  mv -- "$hook" "$backup"
-  if [[ ! -L "$backup" ]]; then
-    chmod 0600 "$backup" 2>/dev/null || true
-  fi
-  info "  Disabled legacy SSH login hook; preserved at $backup"
 }
-disable_legacy_login_hook
+remove_legacy_login_hook
+# Remove the retired helper from installations created by older releases.
+rm -f -- "$INSTALL_DIR/auto-menu.sh"
 
 # Cross-distro helpers -------------------------------------------------------
 PKG_MANAGER=""
@@ -403,39 +389,6 @@ copy_optional_script() {
   fi
 }
 
-# Synchronize the root-only AUTO MENU hook with the persisted setting.
-# This hook never edits sshd configuration and never restarts SSH.
-sync_auto_menu_hook() {
-  local enabled="${1:-false}" hook="/etc/profile.d/conecta-auto-menu.sh" marker="# Managed by ConectaSSH-PRO AUTO MENU; do not edit."
-  if [[ "$enabled" == "true" ]]; then
-    [[ -r "$INSTALL_DIR/auto-menu.sh" ]] || { warn "AUTO MENU enabled but auto-menu.sh is missing; hook not installed."; return 1; }
-    if [[ -e "$hook" ]] && ! grep -Fq "$marker" "$hook" 2>/dev/null; then
-      warn "AUTO MENU hook path belongs to another file; leaving it untouched."
-      return 1
-    fi
-    local staged
-    staged="$(mktemp /etc/profile.d/.conecta-auto-menu.XXXXXX)"
-    cat > "$staged" <<'EOF_HOOK'
-# Managed by ConectaSSH-PRO AUTO MENU; do not edit.
-# Only launch the administrator CLI for an interactive root SSH login.
-case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
-[ "$(id -u 2>/dev/null)" = "0" ] || return 0 2>/dev/null || exit 0
-[ -n "${SSH_CONNECTION:-}" ] || return 0 2>/dev/null || exit 0
-[ -t 0 ] && [ -t 1 ] || return 0 2>/dev/null || exit 0
-[ -r /opt/sshpanel/auto-menu.sh ] || return 0 2>/dev/null || exit 0
-. /opt/sshpanel/auto-menu.sh
-EOF_HOOK
-    chmod 0644 "$staged"
-    mv -f "$staged" "$hook"
-    info "  AUTO MENU login hook synchronized (root SSH interactive only)."
-  else
-    if [[ -f "$hook" ]] && grep -Fq "$marker" "$hook" 2>/dev/null; then
-      rm -f -- "$hook"
-      info "  AUTO MENU disabled; managed login hook removed."
-    fi
-  fi
-}
-
 update_online_web_pro_module() {
   local module_dir="$INSTALL_DIR/online-bridge"
   local source_dir="$SOURCE_DIR/cmd/conecta-online-bridge"
@@ -528,7 +481,6 @@ apply_update() {
   copy_optional_script "update.sh" 700
   copy_optional_script "install.sh" 700
   copy_optional_script "uninstall.sh" 700
-  copy_optional_script "auto-menu.sh" 644
 
   # Keep a local copy of the latest source for easier support and future updates.
   if [[ "$SOURCE_DIR" != "$SOURCE_CACHE_DIR" ]]; then
@@ -567,10 +519,6 @@ except Exception as e:
     print(f"[!] Could not parse {path}: {e}")
     sys.exit(0)
 changed = False
-# Preserve the operator's AUTO MENU choice across updates.
-if 'auto_menu' not in d:
-    d['auto_menu'] = False
-    changed = True
 if 'banner_file' not in d:
     d['banner_file'] = '/opt/sshpanel/banner.txt'
     changed = True
@@ -796,8 +744,6 @@ build_binary
 stop_service
 apply_update
 patch_configs
-AUTO_MENU_ENABLED="$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1])).get("auto_menu", False) else "false")' "$INSTALL_DIR/config.json")"
-sync_auto_menu_hook "$AUTO_MENU_ENABLED"
 restart_service
 
 echo ""
