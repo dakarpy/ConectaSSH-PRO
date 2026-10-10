@@ -4,7 +4,7 @@ ConectaSSH-PRO is an independent Linux server script with a terminal command men
 
 ## Single-binary install and uninstall
 
-The Go executable embeds the install and uninstall entry points. The GitHub Actions workflow builds Linux amd64 and arm64 binaries. Keep the downloaded bootstrap binary outside `/opt/sshpanel` so it remains available for repeated uninstall/reinstall cycles.
+The Go executable embeds the install and uninstall entry points and can be built for Linux amd64 and arm64. Keep the resulting bootstrap binary outside `/opt/sshpanel` so it remains available for repeated uninstall/reinstall cycles.
 
 - Install: `sudo ./conecta-ssh-pro-linux-amd64 -install`
 - Uninstall: `sudo ./conecta-ssh-pro-linux-amd64 -uninstall`
