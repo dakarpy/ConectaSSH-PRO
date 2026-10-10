@@ -39,6 +39,9 @@ class SSHLoginSafetyTests(unittest.TestCase):
         self.assertIn('grep -Fq "$marker" "$hook"', self.update)
         self.assertIn('sync_auto_menu_hook "$AUTO_MENU_ENABLED"', self.update)
 
+    def test_updater_deploys_fixed_uninstaller_to_installed_path(self):
+        self.assertIn('copy_optional_script "uninstall.sh" 700', self.update)
+
     def test_uninstaller_removes_only_recognized_auto_menu_hook(self):
         self.assertIn(MARKER, self.uninstall)
         self.assertIn("grep -Fq '/usr/local/bin/conecta'", self.uninstall)

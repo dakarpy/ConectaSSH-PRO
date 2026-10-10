@@ -527,6 +527,7 @@ apply_update() {
 
   copy_optional_script "update.sh" 700
   copy_optional_script "install.sh" 700
+  copy_optional_script "uninstall.sh" 700
   copy_optional_script "auto-menu.sh" 644
 
   # Keep a local copy of the latest source for easier support and future updates.
