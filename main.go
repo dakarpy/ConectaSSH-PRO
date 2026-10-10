@@ -66,6 +66,8 @@ type TLSForwarderConfig struct {
 	CertFile string `json:"cert_file"`
 	// KeyFile is the path to the corresponding private key in PEM format.
 	KeyFile string `json:"key_file"`
+	// Enabled nil preserves legacy behavior (active); false keeps the port configured but stopped.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type Config struct {
@@ -1790,6 +1792,7 @@ func startAdminAPI(store *Store, addr string) {
 	mux.Handle("/api/tls/upload-pem", saSession(handleManagedProxyOrLocal(store, handleTLSUploadPEM)))
 	mux.Handle("/api/tls/certs", saSession(handleManagedProxyOrLocal(store, handleTLSCertList)))
 	mux.Handle("/api/tls/certs/update", saSession(handleManagedProxyOrLocal(store, handleTLSCertUpdate)))
+	mux.Handle("/api/tls/listeners", saSession(http.HandlerFunc(handleTLSListeners)))
 
 	// Superadmin-only: DNSTT key management
 	mux.Handle("/api/dnstt/genkey", saSession(handleManagedProxyOrLocal(store, handleDnsttGenKey)))

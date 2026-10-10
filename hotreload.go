@@ -150,7 +150,7 @@ func (p *tlsListenerPool) Sync(forwarders []TLSForwarderConfig) []error {
 
 	want := make(map[string]TLSForwarderConfig, len(forwarders))
 	for _, f := range forwarders {
-		if f.Listen != "" {
+		if f.Listen != "" && (f.Enabled == nil || *f.Enabled) {
 			want[f.Listen] = f
 		}
 	}
@@ -247,7 +247,7 @@ func (p *tlsListenerPool) HasAll(forwarders []TLSForwarderConfig) bool {
 		return false
 	}
 	for _, f := range forwarders {
-		if f.Listen == "" {
+		if f.Listen == "" || (f.Enabled != nil && !*f.Enabled) {
 			continue
 		}
 		if !p.Has(f.Listen) {

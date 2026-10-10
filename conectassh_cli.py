@@ -1148,46 +1148,99 @@ def select_certificate():
 
 
 def tls_listener_add():
-    # El certificado debe existir y seleccionarse antes de pedir/abrir el puerto.
-    cert, key = select_certificate()
-    cfg = request("GET", "/api/server/config")
-    listen = normalize_public_endpoint(ask("Puerto TLS que vas a abrir", "443"))
-    listeners = cfg.get("tls_forwarders") or []
-    listeners.append({"listen": listen, "cert_file": cert, "key_file": key})
+    """Add another TLS port using the one shared certificate/domain."""
+    cfg = request("GET", "/api/server/config") or {}
+    listeners = list(cfg.get("tls_forwarders") or [])
+    if listeners:
+        cert, key = listeners[0].get("cert_file", ""), listeners[0].get("key_file", "")
+        if not cert or not key:
+            raise CLIError("La escucha existente no tiene certificado/clave válidos")
+    else:
+        cert, key = select_certificate()
+    listen = normalize_public_endpoint(ask("Puerto TLS que vas a agregar", "8443"))
+    if any(str(item.get("listen")) == listen for item in listeners):
+        raise CLIError("Ese puerto TLS ya está configurado")
+    listeners.append({"listen": listen, "cert_file": cert, "key_file": key, "enabled": True})
+    request("POST", "/api/tls/listeners", {"tls_forwarders": listeners})
+    print("Puerto TLS agregado y activado. Se reutiliza el certificado compartido.")
+
+
+def tls_listener_status(entry):
+    enabled = entry.get("enabled", True)
+    addr = str(entry.get("listen", ""))
+    port = addr.rsplit(":", 1)[-1]
+    if not enabled:
+        return "OFF"
+    try:
+        with open("/proc/net/tcp", encoding="ascii") as f:
+            rows = f.read().splitlines()[1:]
+        with open("/proc/net/tcp6", encoding="ascii") as f:
+            rows += f.read().splitlines()[1:]
+        port_hex = f"{int(port):04X}"
+        listening = any(len(cols := row.split()) > 3 and cols[1].rsplit(":", 1)[-1].upper() == port_hex and cols[3] == "0A" for row in rows)
+        return "ON" if listening else "WARN"
+    except (OSError, ValueError):
+        return "WARN"
+
+
+def tls_listener_save(cfg, listeners):
     cfg["tls_forwarders"] = listeners
-    save_settings("/api/server/config", cfg)
+    return request("POST", "/api/tls/listeners", {"tls_forwarders": listeners})
 
 
 def tls_listener_edit(index):
-    cfg = request("GET", "/api/server/config")
-    listeners = cfg.get("tls_forwarders") or []
-    if index >= len(listeners):
-        raise CLIError("La escucha TLS fue eliminada")
+    def selected_entry():
+        current = request("GET", "/api/server/config") or {}
+        entries = current.get("tls_forwarders") or []
+        if index >= len(entries):
+            raise CLIError("La escucha TLS fue eliminada")
+        return current, entries
+
+    cfg, listeners = selected_entry()
     entry = listeners[index]
-    options = {"1": ("Cambiar dirección de escucha", lambda: tls_listener_field(index, "listen")),
-               "2": ("Seleccionar certificado", lambda: tls_listener_field(index, "certificate")),
-               "3": ("Eliminar escucha", lambda: tls_listener_field(index, "remove"))}
-    print_wrapped(f"Escucha: {entry['listen']}  Certificado: {entry['cert_file']}")
-    menu("ESCUCHA TLS", options, force_single=True)
 
-
-def tls_listener_field(index, field):
-    cfg = request("GET", "/api/server/config")
-    listeners = cfg.get("tls_forwarders") or []
-    if index >= len(listeners):
-        raise CLIError("TLS listener was removed")
-    if field == "remove":
-        if not confirm("¿Eliminar esta escucha TLS?"):
+    def toggle(enabled):
+        current, entries = selected_entry()
+        value = entries[index].get("enabled", True)
+        if bool(value) == enabled:
+            print("El puerto ya está " + ("activado" if enabled else "desactivado") + ".")
             return
-        listeners.pop(index)
-    elif field == "certificate":
-        listeners[index]["cert_file"], listeners[index]["key_file"] = select_certificate()
-    else:
-        listeners[index]["listen"] = normalize_public_endpoint(
-            ask("Puerto TLS", str(listeners[index]["listen"]).rsplit(":", 1)[-1])
-        )
-    cfg["tls_forwarders"] = listeners
-    save_settings("/api/server/config", cfg)
+        entries[index]["enabled"] = enabled
+        tls_listener_save(current, entries)
+        print("Puerto TLS " + ("activado" if enabled else "desactivado") + ".")
+
+    def change_port():
+        current, entries = selected_entry()
+        old = str(entries[index].get("listen", ""))
+        new = normalize_public_endpoint(ask("Nuevo puerto TLS", old.rsplit(":", 1)[-1]))
+        if any(i != index and str(item.get("listen")) == new for i, item in enumerate(entries)):
+            raise CLIError("Ese puerto ya está configurado en TLS")
+        entries[index]["listen"] = new
+        tls_listener_save(current, entries)
+
+    def remove():
+        current, entries = selected_entry()
+        if not confirm("¿Remover únicamente este puerto TLS? El certificado compartido se conservará."):
+            return
+        entries.pop(index)
+        tls_listener_save(current, entries)
+        print("Puerto removido. El certificado compartido se conservó.")
+
+    def details():
+        current, entries = selected_entry()
+        item = entries[index]
+        print("Puerto:", item.get("listen", "--"))
+        print("Estado:", "(" + tls_listener_status(item) + ")")
+        print("Certificado:", item.get("cert_file", "--"))
+        print("Dominio:", (request("GET", "/api/tls/listeners") or {}).get("domain") or "No detectado")
+
+    menu(f"TLS {entry.get('listen', '')}", {
+        "1": ("ACTIVAR PUERTO", lambda: toggle(True)),
+        "2": ("DESACTIVAR PUERTO", lambda: toggle(False)),
+        "3": ("CAMBIAR PUERTO", change_port),
+        "4": ("REMOVER PUERTO", remove),
+        "5": ("VER DETALLES", details),
+    }, force_single=True, force_one_page=True)
 
 
 def tls_certificate_menu():
@@ -1200,16 +1253,34 @@ def tls_certificate_menu():
 
 def tls_listener_menu():
     def options():
-        listeners = (request("GET", "/api/server/config") or {}).get("tls_forwarders") or []
+        cfg = request("GET", "/api/server/config") or {}
+        listeners = cfg.get("tls_forwarders") or []
+        cert_info = request("GET", "/api/tls/listeners") or {}
+        domain = cert_info.get("domain") or "sin certificado"
         result = {
-            "1": ("GENERAR UN CERTIFICADO", tls_certificate_menu),
-            "2": ("ABRIR UN PUERTO TLS", tls_listener_add),
+            "1": ("GENERAR CERTIFICADO", tls_certificate_menu),
+            "2": ("AGREGAR PUERTO TLS", tls_listener_add),
+            "3": ("ESTADO REAL TLS", lambda: tls_listener_show_status(cfg, domain)),
         }
-        result.update({str(index + 3): (listener.get("listen", "Escucha TLS"),
-                                         lambda i=index: tls_listener_edit(i))
-                       for index, listener in enumerate(listeners)})
+        result.update({str(index + 4): (
+            f"{listener.get('listen', 'TLS')} ({tls_listener_status(listener)})",
+            lambda i=index: tls_listener_edit(i)) for index, listener in enumerate(listeners)})
         return result
-    menu("ESCUCHAS TLS", options, force_single=True)
+    menu("TLS TUNNEL", options, force_single=True)
+
+
+def tls_listener_show_status(cfg=None, domain=None):
+    cfg = cfg or (request("GET", "/api/server/config") or {})
+    info = request("GET", "/api/tls/listeners") or {}
+    domain = domain or info.get("domain") or "No detectado"
+    listeners = cfg.get("tls_forwarders") or []
+    print("Dominio compartido:", domain)
+    print("Puertos configurados:", len(listeners))
+    for item in listeners:
+        print(f"{item.get('listen', '--')}: ({tls_listener_status(item)})")
+    if not listeners:
+        print("No hay puertos TLS configurados.")
+    print("Nota: ON/WARN verifica el socket TCP, no un handshake TLS/SSH completo.")
 
 
 def public_ssh_http_display(config):
