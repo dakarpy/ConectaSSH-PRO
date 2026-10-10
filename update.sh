@@ -381,10 +381,8 @@ apply_update() {
     fi
   fi
 
-  # Install the controlled login hook; actual launch remains governed by auto_menu.
-  if [[ -f "$SOURCE_DIR/auto-menu.sh" ]]; then
-    install -m 0644 "$SOURCE_DIR/auto-menu.sh" /etc/profile.d/conecta-auto-menu.sh
-  fi
+  # CRITICAL SSH SAFETY: updates must never create or re-enable login hooks.
+  # Existing disabled hooks remain disabled. CLI stays manual (`conecta`).
   info "  ConectaSSH-PRO CLI updated as conecta; existing menu preserved."
 
   copy_optional_script "update.sh" 700
