@@ -9,6 +9,27 @@ CLI="$INSTALL_DIR/conectassh_cli.py"
 
 fail(){ echo "[x] $*" >&2; exit 1; }
 info(){ echo "[+] $*"; }
+
+# Remove the project's login hook before stopping services or deleting its files.
+# A stale /etc/profile.d hook can run during SSH login and invoke a now-missing
+# CLI, making login appear to open and immediately close. Only remove a file
+# carrying our marker or a known legacy Conecta signature; preserve unknown hooks.
+cleanup_auto_menu_hook() {
+  local hook="/etc/profile.d/conecta-auto-menu.sh"
+  local marker="# Managed by ConectaSSH-PRO AUTO MENU; do not edit."
+  [[ -e "$hook" || -L "$hook" ]] || return 0
+
+  if grep -Fq "$marker" "$hook" 2>/dev/null \
+    || grep -Fq '/usr/local/bin/conecta' "$hook" 2>/dev/null \
+    || { grep -Fq 'CONECTA_AUTO_MENU_RUNNING' "$hook" 2>/dev/null \
+         && grep -Fq '/opt/sshpanel/auto-menu.sh' "$hook" 2>/dev/null; }; then
+    rm -f -- "$hook" || fail "No se pudo retirar el hook AUTO MENU: $hook"
+    [[ ! -e "$hook" && ! -L "$hook" ]] || fail "El hook AUTO MENU sigue presente; se aborta para no dejar un inicio de sesión roto."
+    info "Hook AUTO MENU de Conecta retirado."
+  else
+    info "Se conserva $hook: no se pudo confirmar que pertenezca a ConectaSSH-PRO."
+  fi
+}
 [[ $EUID -eq 0 ]] || fail "La desinstalación requiere root."
 [[ -f "$MARKER" ]] || fail "No existe el manifiesto de instalación de ConectaSSH-PRO. Operación abortada por seguridad."
 source "$MARKER"
@@ -21,6 +42,10 @@ if [[ "$CONFIRM" != "YES" ]]; then
   read -r -p "Escribí DESINSTALAR para continuar: " answer
   [[ "$answer" == "DESINSTALAR" ]] || { echo "Cancelado."; exit 0; }
 fi
+
+# First cleanup pass is intentionally early so no stale profile hook survives
+# if a later uninstall step fails.
+cleanup_auto_menu_hook
 
 systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
 systemctl disable --now "$BRIDGE_SERVICE" >/dev/null 2>&1 || true
@@ -72,9 +97,7 @@ for link in /usr/local/bin/conecta /usr/local/bin/conectassh; do
   if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null || true)" == "$CLI" ]]; then rm -f "$link"; fi
 done
 if [[ -n "$CONECTA_BACKUP" && -e "$CONECTA_BACKUP" ]]; then mv "$CONECTA_BACKUP" /usr/local/bin/conecta; fi
-if [[ -f /etc/profile.d/conecta-auto-menu.sh ]] && { grep -Fq '# Managed by ConectaSSH-PRO AUTO MENU; do not edit.' /etc/profile.d/conecta-auto-menu.sh 2>/dev/null || grep -q '/usr/local/bin/conecta' /etc/profile.d/conecta-auto-menu.sh 2>/dev/null; }; then
-  rm -f /etc/profile.d/conecta-auto-menu.sh
-fi
+# Hook cleanup is performed before service shutdown and verified again after payload removal.
 
 if [[ "$DB_CREATED_BY_CONECTA" == "1" && "$DB_ROLE_CREATED_BY_CONECTA" == "1" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
   su - postgres -c "psql -c \"REVOKE CONNECT ON DATABASE $DB_NAME FROM public; SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB_NAME' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || true
@@ -89,6 +112,9 @@ root=Path(sys.argv[1]).resolve()
 if str(root)!="/opt/sshpanel": raise SystemExit("Unsafe path")
 if root.exists(): shutil.rmtree(root)
 PY
+
+# Second pass verifies uninstall did not leave a managed login hook behind.
+cleanup_auto_menu_hook
 
 [[ -n "$AUTO_MENU_BACKUP" && -f "$AUTO_MENU_BACKUP" ]] && rm -f "$AUTO_MENU_BACKUP" || true
 [[ -n "$RESOLV_BACKUP" && -f "$RESOLV_BACKUP" ]] && rm -f "$RESOLV_BACKUP" || true

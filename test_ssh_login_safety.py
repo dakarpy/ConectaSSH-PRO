@@ -1,6 +1,8 @@
 """Regression tests for the opt-in, root-only SSH login menu hook."""
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -39,7 +41,57 @@ class SSHLoginSafetyTests(unittest.TestCase):
 
     def test_uninstaller_removes_only_recognized_auto_menu_hook(self):
         self.assertIn(MARKER, self.uninstall)
-        self.assertIn("grep -q '/usr/local/bin/conecta'", self.uninstall)
+        self.assertIn("grep -Fq '/usr/local/bin/conecta'", self.uninstall)
+        self.assertIn("grep -Fq 'CONECTA_AUTO_MENU_RUNNING'", self.uninstall)
+        self.assertIn('rm -f -- "$hook"', self.uninstall)
+
+    def test_uninstaller_cleans_hook_before_services_and_rechecks_after_payload_removal(self):
+        first_call = self.uninstall.index('cleanup_auto_menu_hook\n', self.uninstall.index('if [[ "$CONFIRM"'))
+        service_stop = self.uninstall.index('systemctl disable --now "$SERVICE"')
+        payload_remove = self.uninstall.index('shutil.rmtree(root)')
+        second_call = self.uninstall.index('cleanup_auto_menu_hook', payload_remove)
+        self.assertLess(first_call, service_stop)
+        self.assertLess(payload_remove, second_call)
+        self.assertIn('[[ ! -e "$hook" && ! -L "$hook" ]] || fail', self.uninstall)
+        self.assertGreaterEqual(self.uninstall.count('cleanup_auto_menu_hook'), 3)
+
+    def _run_uninstaller_hook_cleanup(self, hook_path):
+        match = re.search(r"(?ms)^cleanup_auto_menu_hook\(\) \{.*?^\}", self.uninstall)
+        self.assertIsNotNone(match, "cleanup_auto_menu_hook function must exist")
+        function = match.group(0).replace(
+            'local hook="/etc/profile.d/conecta-auto-menu.sh"',
+            f'local hook="{hook_path}"',
+            1,
+        )
+        script = 'set -euo pipefail\nfail(){ echo "[x] $*" >&2; exit 1; }\ninfo(){ echo "[+] $*"; }\n' + function + '\ncleanup_auto_menu_hook\n'
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+    def test_uninstaller_runtime_removes_managed_hook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            hook.write_text(MARKER + "\ncase \"$-\" in *i*) ;; *) return 0 ;; esac\n")
+            result = self._run_uninstaller_hook_cleanup(hook)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(hook.exists())
+            self.assertIn("Hook AUTO MENU de Conecta retirado", result.stdout)
+
+    def test_uninstaller_runtime_removes_known_legacy_hook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            hook.write_text('[ -r /opt/sshpanel/auto-menu.sh ] || return 0\nexec /usr/local/bin/conecta\n')
+            result = self._run_uninstaller_hook_cleanup(hook)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(hook.exists())
+
+    def test_uninstaller_runtime_preserves_unrelated_profile_hook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            content = 'export OTHER_PRODUCT_SETTING=1\n'
+            hook.write_text(content)
+            result = self._run_uninstaller_hook_cleanup(hook)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(hook.exists())
+            self.assertEqual(hook.read_text(), content)
 
     def test_no_ssh_service_restart_commands_are_added(self):
         for name, source in (("install.sh", self.install), ("update.sh", self.update), ("uninstall.sh", self.uninstall)):
