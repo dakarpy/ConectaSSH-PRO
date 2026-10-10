@@ -25,7 +25,9 @@ disable_legacy_login_hook() {
   chmod 0700 "$backup_dir"
   backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
   mv -- "$hook" "$backup"
-  chmod 0600 "$backup" 2>/dev/null || true
+  if [[ ! -L "$backup" ]]; then
+    chmod 0600 "$backup" 2>/dev/null || true
+  fi
   info "Disabled legacy SSH login hook; preserved at $backup"
 }
 
@@ -287,7 +289,8 @@ create_rollback_snapshot() {
   mkdir -p "$ROLLBACK_DIR/files"
   : > "$ROLLBACK_DIR/manifest"
   local path key
-  for path in /etc/fstab /etc/resolv.conf /etc/profile.d/go.sh /etc/profile.d/conecta-auto-menu.sh /etc/systemd/system/sshpanel.service /etc/systemd/system/sshpanel-dnstt-redirect.service /usr/local/sbin/sshpanel-dnstt-redirect.sh /usr/local/bin/conecta /usr/local/bin/conectassh; do
+  # Never snapshot the legacy login hook: rollback must not re-enable it.
+  for path in /etc/fstab /etc/resolv.conf /etc/profile.d/go.sh /etc/systemd/system/sshpanel.service /etc/systemd/system/sshpanel-dnstt-redirect.service /usr/local/sbin/sshpanel-dnstt-redirect.sh /usr/local/bin/conecta /usr/local/bin/conectassh; do
     key="$(printf '%s' "$path" | sed 's#^/##; s#[/]#_#g')"
     if [[ -e "$path" || -L "$path" ]]; then
       printf 'EXISTS\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"
@@ -364,6 +367,8 @@ info "  Package manager: $PKG_MANAGER"
 info "  Service manager: systemd"
 validate_supported_os
 preflight_checks
+# Disable the legacy hook before snapshotting so a failed install cannot restore it.
+disable_legacy_login_hook
 create_rollback_snapshot
 INSTALL_STARTED=true
 

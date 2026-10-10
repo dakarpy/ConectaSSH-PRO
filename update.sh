@@ -44,6 +44,32 @@ BUILD_REPO_URL=""
 
 [[ $EUID -ne 0 ]] && error "Run as root: sudo bash $0"
 
+# Retire legacy login hooks immediately, before fetching/building/stopping services.
+# This also protects installations where a prior release left the hook behind.
+# Disable legacy login hook left by older releases. Never overwrite a backup.
+disable_legacy_login_hook() {
+  local hook="/etc/profile.d/conecta-auto-menu.sh"
+  local backup_dir="$INSTALL_DIR/compat-backups"
+  local backup
+  if [[ ! -e "$hook" && ! -L "$hook" ]]; then
+    return 0
+  fi
+  # Only move our known Conecta hook; do not touch unrelated profile scripts.
+  if ! grep -qE 'conecta|sshpanel|auto_menu' "$hook" 2>/dev/null; then
+    warn "  Found $hook but its contents are not recognized; leaving it untouched."
+    return 0
+  fi
+  mkdir -p "$backup_dir"
+  chmod 0700 "$backup_dir"
+  backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
+  mv -- "$hook" "$backup"
+  if [[ ! -L "$backup" ]]; then
+    chmod 0600 "$backup" 2>/dev/null || true
+  fi
+  info "  Disabled legacy SSH login hook; preserved at $backup"
+}
+disable_legacy_login_hook
+
 # Cross-distro helpers -------------------------------------------------------
 PKG_MANAGER=""
 UPDATE_DEPS=()
@@ -337,26 +363,6 @@ update_online_web_pro_module() {
 
 
 
-# Disable legacy login hook left by older releases. Never overwrite a backup.
-disable_legacy_login_hook() {
-  local hook="/etc/profile.d/conecta-auto-menu.sh"
-  local backup_dir="$INSTALL_DIR/compat-backups"
-  local backup
-  if [[ ! -e "$hook" && ! -L "$hook" ]]; then
-    return 0
-  fi
-  # Only move our known Conecta hook; do not touch unrelated profile scripts.
-  if ! grep -qE 'conecta|sshpanel|auto_menu' "$hook" 2>/dev/null; then
-    warn "  Found $hook but its contents are not recognized; leaving it untouched."
-    return 0
-  fi
-  mkdir -p "$backup_dir"
-  chmod 0700 "$backup_dir"
-  backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
-  mv -- "$hook" "$backup"
-  chmod 0600 "$backup" 2>/dev/null || true
-  info "  Disabled legacy SSH login hook; preserved at $backup"
-}
 
 apply_update() {
   info "[5/7] Applying update..."
