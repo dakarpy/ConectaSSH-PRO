@@ -64,8 +64,12 @@ validate_supported_os() {
 }
 
 check_tcp_ports() {
-  local port
+  local port ssh_port=""
+  ssh_port="$(detect_active_ssh_port)" || error "No se pudo detectar el puerto SSH activo. Se aborta por seguridad."
   for port in "${REQUIRED_TCP_PORTS[@]}"; do
+    if [[ "$port" == "$ssh_port" ]]; then
+      error "Conflicto crítico: SSH utiliza TCP ${ssh_port}, que también requiere Conecta. No se instalará para evitar cortar el acceso remoto."
+    fi
     if ss -H -ltn "( sport = :$port )" 2>/dev/null | grep -q .; then
       warn "Puerto TCP ${port} ya está ocupado. Se ignora; la instalación continúa sin tocar el servicio existente."
     else

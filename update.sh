@@ -659,13 +659,8 @@ DNSTT_PORT="${DNSTT_PORT:-5300}"
 # Resolver configuration belongs to the OS/operator; touching it can sever
 # DNS-dependent management paths during an update.
 
-if command -v ufw >/dev/null 2>&1; then
-  ufw allow 53/udp >/dev/null 2>&1 || true
-fi
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port=53/udp >/dev/null 2>&1 || true
-  firewall-cmd --reload >/dev/null 2>&1 || true
-fi
+# Firewall policy is operator-managed. Never open ports or reload firewalld
+# implicitly during a panel update; configure UDP/53 explicitly if DNSTT is used.
 
 add_iptables_rule() {
   local bin="$1" chain="$2"
