@@ -59,17 +59,17 @@ class WebsocketPort80MenuTest(unittest.TestCase):
         config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
         with patch.object(cli, "request", return_value=config):
             options = cli.websocket_menu_options()
-        self.assertIn("Configuración WebSocket SSH", options["1"][0])
-        self.assertIn("ACTIVAR PUERTO 80", options["2"][0])
-        self.assertIn("DESACTIVADO", options["2"][0])
-        self.assertIn("DESACTIVAR PUERTO 80", options["3"][0])
-        self.assertIn("ESTADO REAL", options["4"][0])
+        self.assertEqual(options["1"][0], "CONFIGURACIÓN")
+        self.assertEqual(options["2"][0], "ACTIVAR PUERTO 80")
+        self.assertNotIn("DESACTIVADO", options["2"][0])
+        self.assertEqual(options["3"][0], "DESACTIVAR PUERTO 80")
+        self.assertEqual(options["4"][0], "VERIFICAR ESTADO")
 
     def test_websocket_menu_status_failure_does_not_hide_controls(self):
         with patch.object(cli, "request", side_effect=cli.CLIError("API unavailable")):
             options = cli.websocket_menu_options()
-        self.assertIn("ESTADO NO DISPONIBLE", options["2"][0])
-        self.assertIn("ACTIVAR PUERTO 80", options["2"][0])
+        self.assertEqual(options["2"][0], "ACTIVAR PUERTO 80")
+        self.assertEqual(options["3"][0], "DESACTIVAR PUERTO 80")
 
     def test_actual_port_state_compares_config_and_kernel_listener(self):
         enabled = {"listen": "0.0.0.0:80", "extra_listen": []}

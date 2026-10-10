@@ -1353,15 +1353,15 @@ def websocket_menu_options():
     except (CLIError, OSError, ValueError, json.JSONDecodeError):
         state = "ESTADO NO DISPONIBLE"
     return {
-        "1": ("Configuración WebSocket SSH", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
-        "2": (f"ACTIVAR PUERTO 80 · {state}", websocket_port80_activate),
-        "3": (f"DESACTIVAR PUERTO 80 · {state}", websocket_port80_deactivate),
-        "4": ("ESTADO REAL DE CONFIGURACIÓN", websocket_port80_show_status),
+        "1": ("CONFIGURACIÓN", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
+        "2": ("ACTIVAR PUERTO 80", websocket_port80_activate),
+        "3": ("DESACTIVAR PUERTO 80", websocket_port80_deactivate),
+        "4": ("VERIFICAR ESTADO", websocket_port80_show_status),
     }
 
 
 def websocket_menu():
-    menu("WEBSOCKET SSH", websocket_menu_options,
+    menu("WEBSOCKET", websocket_menu_options,
          force_single=True, force_one_page=True, status_line=websocket_menu_status_line)
 
 
