@@ -1490,7 +1490,7 @@ def server_settings_menu():
                 marker = "◉" if enabled else "○"
                 marker_color = GREEN if enabled else RED
                 prefix = (paint("[", CYAN) + paint(marker, marker_color, True) +
-                          paint("] ", CYAN) + paint(name, WHITE) + paint(": "))
+                          paint("] ", CYAN) + paint(name, WHITE) + paint(": ", WHITE))
                 value_text = compact_endpoint(value)
                 if name == "SSH/HTTP":
                     parts = value_text.split(" ", 1)
@@ -2105,7 +2105,7 @@ def connection_protocols_visual(show_return=True):
                 state_text = parts[0] if parts else "WARN"
                 suffix = (" " + parts[1]) if len(parts) > 1 else ""
                 state_color = GREEN if state_text == "ON" else RED if state_text == "OFF" else YELLOW
-                return name_part + paint(": ") + paint(state_text, state_color, True) + paint(suffix, WHITE)
+                return name_part + paint(": ", WHITE) + paint(state_text, state_color, True) + paint(suffix, WHITE)
             return name_part + paint(": " + value_text, WHITE)
 
         left_colored = paint_protocol(blocks[i])
