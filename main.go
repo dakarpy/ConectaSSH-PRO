@@ -3550,6 +3550,7 @@ func maybeHTTPStartPrefix(b []byte) bool {
 
 func main() {
 	installFlag := flag.Bool("install", false, "run the intelligent ConectaSSH-PRO installer")
+	uninstallFlag := flag.Bool("uninstall", false, "safely remove ConectaSSH-PRO-owned components")
 	if memTotal, _, err := readMemInfo(); err == nil && memTotal > 0 {
 		limit := int64(memTotal) * 80 / 100
 		debug.SetMemoryLimit(limit)
@@ -3561,8 +3562,15 @@ func main() {
 	userCountFlag := flag.Bool("usercount", false, "show per-user connection counters (single line)")
 	hashAdminPasswordStdin := flag.Bool("hash-admin-password-stdin", false, "read an admin password from stdin and print a bcrypt hash")
 	flag.Parse()
+	if *installFlag && *uninstallFlag {
+		fmt.Fprintln(os.Stderr, "ERROR: elegí -install o -uninstall, no ambos.")
+		os.Exit(2)
+	}
 	if *installFlag {
 		os.Exit(runInstallerMode())
+	}
+	if *uninstallFlag {
+		os.Exit(runUninstallerMode())
 	}
 	if *hashAdminPasswordStdin {
 		password, readErr := io.ReadAll(io.LimitReader(os.Stdin, 1025))

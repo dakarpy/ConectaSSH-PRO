@@ -451,8 +451,7 @@ if $NEED_GO; then
   fi
   tar -C /usr/local -xzf /tmp/go.tar.gz
   rm -f /tmp/go.tar.gz
-  echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
-  chmod +x /etc/profile.d/go.sh
+  # Go is added to PATH for this installer process only; do not leave a global profile file behind.
 fi
 
 export PATH=$PATH:/usr/local/go/bin

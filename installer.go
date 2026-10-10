@@ -21,6 +21,9 @@ import (
 //go:embed install.sh
 var embeddedInstaller []byte
 
+//go:embed uninstall.sh
+var embeddedUninstaller []byte
+
 const installerRepo = "https://github.com/dakarpy/ConectaSSH-PRO.git"
 
 type installerPort struct {
@@ -71,6 +74,64 @@ func runInstallerMode() int {
 	fmt.Println("[✓] Puertos predeterminados disponibles.")
 	if err := executeEmbeddedInstaller(); err != nil {
 		fmt.Fprintf(os.Stderr, "\nERROR: instalación: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runUninstallerMode() int {
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "ERROR: ejecutá el desinstalador inteligente como root.")
+		return 1
+	}
+	if !commandExists("systemctl") || !fileExists("/run/systemd/system") {
+		fmt.Fprintln(os.Stderr, "ERROR: systemd no está disponible; no se realizaron cambios.")
+		return 1
+	}
+	if !fileExists("/opt/sshpanel/.conecta-install-manifest") {
+		residual := []string{}
+		for _, p := range []string{"/opt/sshpanel", "/etc/systemd/system/sshpanel.service", "/etc/systemd/system/conecta-online-bridge.service", "/etc/systemd/system/sshpanel-dnstt-redirect.service"} {
+			if fileExists(p) {
+				residual = append(residual, p)
+			}
+		}
+		if len(residual) == 0 {
+			fmt.Println("ConectaSSH-PRO ya está desinstalado. No quedan componentes administrados detectables.")
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, "ERROR: quedan archivos del producto, pero falta el manifiesto de propiedad.")
+		fmt.Fprintln(os.Stderr, "No se eliminará nada automáticamente para proteger datos y servicios ajenos:")
+		for _, p := range residual {
+			fmt.Fprintln(os.Stderr, " -", p)
+		}
+		return 1
+	}
+	tmp, err := os.CreateTemp("", "conecta-uninstaller-*.sh")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: no se pudo preparar el desinstalador:", err)
+		return 1
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(embeddedUninstaller); err != nil {
+		tmp.Close()
+		fmt.Fprintln(os.Stderr, "ERROR: no se pudo escribir el desinstalador:", err)
+		return 1
+	}
+	if err = tmp.Chmod(0700); err != nil {
+		tmp.Close()
+		fmt.Fprintln(os.Stderr, "ERROR: no se pudo proteger el desinstalador:", err)
+		return 1
+	}
+	if err = tmp.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: no se pudo cerrar el desinstalador:", err)
+		return 1
+	}
+	cmd := exec.Command("/bin/bash", name)
+	cmd.Env = append(os.Environ(), "CONFIRM=YES")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: la desinstalación no terminó correctamente:", err)
 		return 1
 	}
 	return 0

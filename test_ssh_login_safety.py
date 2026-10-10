@@ -42,6 +42,25 @@ class SSHLoginSafetyTests(unittest.TestCase):
     def test_updater_deploys_fixed_uninstaller_to_installed_path(self):
         self.assertIn('copy_optional_script "uninstall.sh" 700', self.update)
 
+    def test_uninstaller_unmounts_owned_log_tmpfs_before_payload_removal(self):
+        unmount = self.uninstall.index('umount "$INSTALL_DIR/logs"')
+        payload = self.uninstall.index('shutil.rmtree(root)')
+        self.assertLess(unmount, payload)
+        self.assertIn('No se pudo desmontar $INSTALL_DIR/logs', self.uninstall)
+        self.assertIn('ConectaSSH-PRO payload still exists after removal', self.uninstall)
+
+    def test_uninstaller_verifies_product_systemd_units_are_gone(self):
+        self.assertIn('Quedó una unidad residual:', self.uninstall)
+        self.assertIn('for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"', self.uninstall)
+
+    def test_go_binary_exposes_embedded_uninstall_mode(self):
+        installer_go = (ROOT / "installer.go").read_text()
+        main_go = (ROOT / "main.go").read_text()
+        self.assertIn('//go:embed uninstall.sh', installer_go)
+        self.assertIn('func runUninstallerMode() int', installer_go)
+        self.assertIn('flag.Bool("uninstall"', main_go)
+        self.assertIn('os.Exit(runUninstallerMode())', main_go)
+
     def test_uninstaller_removes_only_recognized_auto_menu_hook(self):
         self.assertIn(MARKER, self.uninstall)
         self.assertIn("grep -Fq '/usr/local/bin/conecta'", self.uninstall)

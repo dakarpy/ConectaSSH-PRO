@@ -105,13 +105,26 @@ if [[ "$DB_CREATED_BY_CONECTA" == "1" && "$DB_ROLE_CREATED_BY_CONECTA" == "1" ]]
   su - postgres -c "dropuser --if-exists '$DB_USER'" >/dev/null 2>&1 || true
 fi
 
+# Unmount the product-owned log tmpfs before removing its mountpoint.
+if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$INSTALL_DIR/logs"; then
+  if ! umount "$INSTALL_DIR/logs"; then
+    fail "No se pudo desmontar $INSTALL_DIR/logs; se detiene para no dejar residuos."
+  fi
+fi
+
 python3 - "$INSTALL_DIR" <<'PY'
 from pathlib import Path
 import shutil,sys
 root=Path(sys.argv[1]).resolve()
 if str(root)!="/opt/sshpanel": raise SystemExit("Unsafe path")
 if root.exists(): shutil.rmtree(root)
+if root.exists(): raise SystemExit("ConectaSSH-PRO payload still exists after removal")
 PY
+
+# Verify owned systemd unit files are absent; don't hide incomplete cleanup.
+for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
+  [[ ! -e "/etc/systemd/system/$unit" ]] || fail "Quedó una unidad residual: /etc/systemd/system/$unit"
+done
 
 # Second pass verifies uninstall did not leave a managed login hook behind.
 cleanup_auto_menu_hook

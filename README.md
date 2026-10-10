@@ -2,6 +2,15 @@
 
 ConectaSSH-PRO is an independent Linux server script with a terminal command menu and an HTTP API. It manages SSH accounts, native Xray clients and inbounds, connection protocols, TLS certificates, VPS traffic, and a Telegram sales bot. There is no web administration panel. Run `conecta` as root; it reads the local API credential and never asks the operator for a login or password. The menu is designed for mobile SSH terminals and shows live VPS status at the top.
 
+## Single-binary install and uninstall
+
+The Go executable embeds the install and uninstall entry points. The GitHub Actions workflow builds Linux amd64 and arm64 binaries. Keep the downloaded bootstrap binary outside `/opt/sshpanel` so it remains available for repeated uninstall/reinstall cycles.
+
+- Install: `sudo ./conecta-ssh-pro-linux-amd64 -install`
+- Uninstall: `sudo ./conecta-ssh-pro-linux-amd64 -uninstall`
+
+The uninstaller removes product-owned services, payload, symlinks, managed AUTO MENU hooks, and the product log tmpfs mount. It intentionally preserves PostgreSQL account data and SSH users, shared OS dependencies, and unrecognized files/services. If ownership cannot be proven, it stops instead of deleting unrelated data. After a successful uninstall, run the same bootstrap binary again with `-install`.
+
 ## Install
 
 On a fresh Linux server with systemd, clone this repository and run the installer:
