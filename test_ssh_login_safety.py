@@ -33,18 +33,18 @@ class SSHLoginSafetyTests(unittest.TestCase):
         self.assertNotIn('copy_optional_script "auto-menu.sh"', self.update)
         self.assertIn("remove_legacy_login_hook", self.update)
 
-    def test_uninstaller_still_cleans_known_legacy_hook(self):
-        self.assertIn("cleanup_auto_menu_hook", self.uninstall)
-        self.assertIn("grep -Fq '/usr/local/bin/conecta'", self.uninstall)
-        self.assertIn('rm -f -- "$hook"', self.uninstall)
+    def test_uninstaller_preserves_global_legacy_hooks_without_manifest_ownership(self):
+        self.assertNotIn("cleanup_auto_menu_hook", self.uninstall)
+        self.assertIn("Global /etc/profile.d hooks are not in the ownership manifest; preserve them.", self.uninstall)
+        self.assertNotIn('rm -f -- "$hook"', self.uninstall)
 
     def test_updater_deploys_fixed_uninstaller(self):
         self.assertIn('copy_optional_script "uninstall.sh" 700', self.update)
 
     def test_uninstaller_unmounts_owned_log_tmpfs_before_payload_removal(self):
         self.assertLess(self.uninstall.index('umount "$INSTALL_DIR/logs"'),
-                        self.uninstall.index("shutil.rmtree(root)"))
-        self.assertIn("ConectaSSH-PRO payload still exists after removal", self.uninstall)
+                        self.uninstall.index("shutil.rmtree(p)"))
+        self.assertIn("Ruta insegura; no se elimina el directorio", self.uninstall)
 
     def test_uninstaller_verifies_product_systemd_units_are_gone(self):
         self.assertIn("Quedó una unidad residual:", self.uninstall)

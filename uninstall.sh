@@ -1,134 +1,202 @@
 #!/bin/bash
+# Safe ConectaSSH-PRO removal. Data is preserved by default; --purge is destructive.
 set -euo pipefail
+
 INSTALL_DIR="/opt/sshpanel"
 MARKER="$INSTALL_DIR/.conecta-install-manifest"
 SERVICE="sshpanel.service"
 BRIDGE_SERVICE="conecta-online-bridge.service"
 DNS_SERVICE="sshpanel-dnstt-redirect.service"
+STATE_DIR="/var/lib/conecta-ssh-pro"
+TXN_MANIFEST="$STATE_DIR/manifest"
 CLI="$INSTALL_DIR/conectassh_cli.py"
+PURGE=false
 
 fail(){ echo "[x] $*" >&2; exit 1; }
 info(){ echo "[+] $*"; }
+warn(){ echo "[!] $*" >&2; }
 
-# Remove the project's login hook before stopping services or deleting its files.
-# A stale /etc/profile.d hook can run during SSH login and invoke a now-missing
-# CLI, making login appear to open and immediately close. Only remove a file
-# carrying our marker or a known legacy Conecta signature; preserve unknown hooks.
-cleanup_auto_menu_hook() {
-  local hook="/etc/profile.d/conecta-auto-menu.sh"
-  local marker="# Managed by ConectaSSH-PRO AUTO MENU; do not edit."
-  [[ -e "$hook" || -L "$hook" ]] || return 0
+for arg in "$@"; do
+  case "$arg" in
+    --purge) PURGE=true ;;
+    --help|-h) echo "Uso: $0 [--purge]"; echo "Por defecto preserva /opt/sshpanel (configuración, credenciales, certificados, llaves y logs). --purge elimina los datos locales del producto."; exit 0 ;;
+    *) fail "Opción desconocida: $arg" ;;
+  esac
+done
 
-  if grep -Fq "$marker" "$hook" 2>/dev/null \
-    || grep -Fq '/usr/local/bin/conecta' "$hook" 2>/dev/null \
-    || { grep -Fq 'CONECTA_AUTO_MENU_RUNNING' "$hook" 2>/dev/null \
-         && grep -Fq '/opt/sshpanel/auto-menu.sh' "$hook" 2>/dev/null; }; then
-    rm -f -- "$hook" || fail "No se pudo retirar el hook AUTO MENU: $hook"
-    [[ ! -e "$hook" && ! -L "$hook" ]] || fail "El hook AUTO MENU sigue presente; se aborta para no dejar un inicio de sesión roto."
-    info "Hook AUTO MENU de Conecta retirado."
-  else
-    info "Se conserva $hook: no se pudo confirmar que pertenezca a ConectaSSH-PRO."
-  fi
-}
 [[ $EUID -eq 0 ]] || fail "La desinstalación requiere root."
-[[ -f "$MARKER" ]] || fail "No existe el manifiesto de instalación de ConectaSSH-PRO. Operación abortada por seguridad."
+[[ -d "$INSTALL_DIR" && ! -L "$INSTALL_DIR" ]] || fail "No existe un directorio de instalación seguro en $INSTALL_DIR."
+[[ -f "$MARKER" && ! -L "$MARKER" ]] || fail "No existe el manifiesto de propiedad; no se eliminará nada."
+[[ "$(stat -c '%u' "$MARKER" 2>/dev/null)" == "0" ]] || fail "El manifiesto no pertenece a root."
+mode="$(stat -c '%a' "$MARKER" 2>/dev/null || echo 777)"
+(( (8#$mode & 077) == 0 )) || fail "Permisos inseguros en el manifiesto."
+# The marker is root-owned and mode 600. Only accept fixed product/path values.
 source "$MARKER"
-[[ "$PRODUCT" == "ConectaSSH-PRO" && "$INSTALL_DIR" == "/opt/sshpanel" ]] || fail "Manifiesto no reconocido."
+[[ "${PRODUCT:-}" == "ConectaSSH-PRO" && "${INSTALL_DIR:-}" == "/opt/sshpanel" ]] || fail "Manifiesto no reconocido."
+[[ "${MANIFEST_VERSION:-1}" =~ ^[0-9]+$ ]] || fail "Versión de manifiesto inválida."
+STATE="${STATE:-installed}"
+[[ "$STATE" == "installed" || "$STATE" == "installing" || "$STATE" == "rollback_pending" ]] || fail "Estado no desinstalable: $STATE."
+OWNED_UNIT_SSH_PANEL="${OWNED_UNIT_SSH_PANEL:-1}"
+OWNED_UNIT_ONLINE_BRIDGE="${OWNED_UNIT_ONLINE_BRIDGE:-0}"
+OWNED_UNIT_DNSTT_REDIRECT="${OWNED_UNIT_DNSTT_REDIRECT:-0}"
+OWNED_PATH_CLI_CONECTA="${OWNED_PATH_CLI_CONECTA:-0}"
+OWNED_PATH_CLI_CONECTASSH="${OWNED_PATH_CLI_CONECTASSH:-0}"
+DB_NAME="${DB_NAME:-sshpanel}"
+DB_USER="${DB_USER:-sshpanel}"
+DB_CREATED_BY_CONECTA="${DB_CREATED_BY_CONECTA:-0}"
+DB_ROLE_CREATED_BY_CONECTA="${DB_ROLE_CREATED_BY_CONECTA:-0}"
 
-if [[ "$CONFIRM" != "YES" ]]; then
-  echo "DESINSTALACIÓN SEGURA — CONECTASSH-PRO"
-  echo "Solo se eliminarán componentes identificados como propios de ConectaSSH-PRO."
-  echo "SSHPlus/Horizon, sshd, usuarios SSH y paquetes compartidos NO se eliminan."
-  read -r -p "Escribí DESINSTALAR para continuar: " answer
-  [[ "$answer" == "DESINSTALAR" ]] || { echo "Cancelado."; exit 0; }
+if [[ "${CONFIRM:-}" != "YES" ]]; then
+  echo "Desinstalación segura de CONECTA SSH PRO"
+  if $PURGE; then
+    echo "ATENCIÓN: --purge eliminará los datos locales del producto."
+    read -r -p "Escribí PURGAR para confirmar el borrado: " answer
+    [[ "$answer" == "PURGAR" ]] || { echo "Cancelado."; exit 0; }
+  else
+    echo "Se preservarán configuración, credenciales, certificados, llaves, logs y archivos de datos."
+    read -r -p "Escribí DESINSTALAR para continuar: " answer
+    [[ "$answer" == "DESINSTALAR" ]] || { echo "Cancelado."; exit 0; }
+  fi
 fi
 
-# First cleanup pass is intentionally early so no stale profile hook survives
-# if a later uninstall step fails.
-cleanup_auto_menu_hook
+# Global /etc/profile.d hooks are not in the ownership manifest; preserve them.
+# Preflight every unit before changing anything. If a unit is ambiguous, abort
+# before moving/removing the payload so no unknown service is left broken.
+owned_unit_file() {
+  local unit="$1" flag="$2" path="/etc/systemd/system/$1"
+  [[ "$flag" == "1" && -f "$path" && ! -L "$path" ]] || return 1
+  case "$unit" in
+    "$SERVICE") grep -q 'WorkingDirectory=/opt/sshpanel' "$path" && grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$path" ;;
+    "$BRIDGE_SERVICE") grep -q 'conecta-online-bridge' "$path" ;;
+    "$DNS_SERVICE") grep -q 'sshpanel-dnstt-redirect.sh' "$path" ;;
+    *) return 1 ;;
+  esac
+}
+for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
+  unit_path="/etc/systemd/system/$unit"
+  [[ -e "$unit_path" || -L "$unit_path" ]] || continue
+  flag=0
+  case "$unit" in
+    "$SERVICE") flag="$OWNED_UNIT_SSH_PANEL" ;;
+    "$BRIDGE_SERVICE") flag="$OWNED_UNIT_ONLINE_BRIDGE" ;;
+    "$DNS_SERVICE") flag="$OWNED_UNIT_DNSTT_REDIRECT" ;;
+  esac
+  if ! owned_unit_file "$unit" "$flag"; then
+    fail "Se conserva todo: no se pudo demostrar propiedad exclusiva de $unit_path."
+  fi
+done
+if ! owned_unit_file "$SERVICE" "$OWNED_UNIT_SSH_PANEL" && systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+  fail "sshpanel.service está activo pero su unidad no está demostrablemente bajo propiedad de este manifiesto; no se mueve el directorio."
+fi
 
-systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
-systemctl disable --now "$BRIDGE_SERVICE" >/dev/null 2>&1 || true
-systemctl disable --now "$DNS_SERVICE" >/dev/null 2>&1 || true
+# Stop only the product's verified units; never ssh/sshd or any SSH user/session.
+for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
+  unit_path="/etc/systemd/system/$unit"
+  [[ -e "$unit_path" || -L "$unit_path" ]] || continue
+  flag=0
+  case "$unit" in
+    "$SERVICE") flag="$OWNED_UNIT_SSH_PANEL" ;;
+    "$BRIDGE_SERVICE") flag="$OWNED_UNIT_ONLINE_BRIDGE" ;;
+    "$DNS_SERVICE") flag="$OWNED_UNIT_DNSTT_REDIRECT" ;;
+  esac
+  if owned_unit_file "$unit" "$flag"; then
+    systemctl disable --now "$unit" >/dev/null 2>&1 || fail "No se pudo detener de forma segura $unit; se aborta."
+  fi
+done
+
+# Logs may live on a tmpfs mounted by the product unit. Copy them off the
+# mount before unmounting so default uninstall truly preserves the log files.
+LOG_STAGE=""
+if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$INSTALL_DIR/logs"; then
+  if ! $PURGE; then
+    LOG_STAGE="$(mktemp -d /var/tmp/conecta-ssh-pro-logs.XXXXXX)"
+    cp -a "$INSTALL_DIR/logs/." "$LOG_STAGE/" || fail "No se pudieron preservar los logs; se aborta."
+  fi
+  umount "$INSTALL_DIR/logs" || fail "No se pudo desmontar el tmpfs de logs; se aborta sin borrar los datos."
+  if ! $PURGE; then
+    mkdir -p "$INSTALL_DIR/logs"
+    cp -a "$LOG_STAGE/." "$INSTALL_DIR/logs/"
+    rm -rf -- "$LOG_STAGE"
+  fi
+fi
 
 for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
-  [[ -f "/etc/systemd/system/$unit" ]] && rm -f "/etc/systemd/system/$unit"
+  unit_path="/etc/systemd/system/$unit"
+  [[ -e "$unit_path" || -L "$unit_path" ]] || continue
+  flag=0
+  case "$unit" in
+    "$SERVICE") flag="$OWNED_UNIT_SSH_PANEL" ;;
+    "$BRIDGE_SERVICE") flag="$OWNED_UNIT_ONLINE_BRIDGE" ;;
+    "$DNS_SERVICE") flag="$OWNED_UNIT_DNSTT_REDIRECT" ;;
+  esac
+  if owned_unit_file "$unit" "$flag"; then
+    rm -f -- "$unit_path"
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  fi
 done
 systemctl daemon-reload >/dev/null 2>&1 || true
-systemctl reset-failed "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE" >/dev/null 2>&1 || true
-
-# Do not delete generic PREROUTING redirects: without a persisted ownership
-# record, an identical rule may belong to another service. Never delete a
-# shared nftables table; preserve ambiguous rules and report them for review.
-if command -v iptables >/dev/null 2>&1 && iptables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; then
-  info "Se conserva la regla iptables UDP/53 -> 5300: no existe prueba de propiedad exclusiva."
-fi
-if command -v ip6tables >/dev/null 2>&1 && ip6tables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; then
-  info "Se conserva la regla ip6tables UDP/53 -> 5300: no existe prueba de propiedad exclusiva."
-fi
-if command -v nft >/dev/null 2>&1 && nft list table inet sshpanel_nat >/dev/null 2>&1; then
-  info "Se conserva inet sshpanel_nat: no se elimina una tabla nftables completa automáticamente."
-fi
-
-if [[ "$UFW_53_ADDED" == "1" ]] && command -v ufw >/dev/null 2>&1; then ufw delete allow 53/udp >/dev/null 2>&1 || true; fi
-if [[ "$FIREWALLD_53_ADDED" == "1" ]] && command -v firewall-cmd >/dev/null 2>&1; then
-  firewall-cmd --permanent --remove-port=53/udp >/dev/null 2>&1 || true
-  firewall-cmd --reload >/dev/null 2>&1 || true
-fi
-
-if [[ "$RESOLVED_WAS_ACTIVE" == "1" ]]; then systemctl enable --now systemd-resolved.service >/dev/null 2>&1 || true; fi
-if [[ -n "$RESOLV_LINK_TARGET" && -e "$RESOLV_LINK_TARGET" ]]; then
-  rm -f /etc/resolv.conf; ln -s "$RESOLV_LINK_TARGET" /etc/resolv.conf
-elif [[ -f "$RESOLV_BACKUP" ]]; then
-  rm -f /etc/resolv.conf; cp -a "$RESOLV_BACKUP" /etc/resolv.conf
-fi
-
-if [[ "$FSTAB_TMPFS_ADDED" == "1" && -f /etc/fstab ]]; then
-  python3 - <<'PY'
-from pathlib import Path
-p=Path("/etc/fstab")
-lines=p.read_text().splitlines()
-lines=[x for x in lines if x.split()[:2] != ["tmpfs","/opt/sshpanel/logs"]]
-p.write_text("\n".join(lines)+("\n" if lines else ""))
-PY
-fi
-
-for link in /usr/local/bin/conecta /usr/local/bin/conectassh; do
-  if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null || true)" == "$CLI" ]]; then rm -f "$link"; fi
-done
-if [[ -n "$CONECTA_BACKUP" && -e "$CONECTA_BACKUP" ]]; then mv "$CONECTA_BACKUP" /usr/local/bin/conecta; fi
-# Hook cleanup is performed before service shutdown and verified again after payload removal.
-
-if [[ "$DB_CREATED_BY_CONECTA" == "1" && "$DB_ROLE_CREATED_BY_CONECTA" == "1" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
-  su - postgres -c "psql -c \"REVOKE CONNECT ON DATABASE $DB_NAME FROM public; SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB_NAME' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || true
-  su - postgres -c "dropdb --if-exists '$DB_NAME'" >/dev/null 2>&1 || true
-  su - postgres -c "dropuser --if-exists '$DB_USER'" >/dev/null 2>&1 || true
-fi
-
-# Unmount the product-owned log tmpfs before removing its mountpoint.
-if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$INSTALL_DIR/logs"; then
-  if ! umount "$INSTALL_DIR/logs"; then
-    fail "No se pudo desmontar $INSTALL_DIR/logs; se detiene para no dejar residuos."
+for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
+  unit_path="/etc/systemd/system/$unit"
+  if [[ -e "$unit_path" || -L "$unit_path" ]]; then
+    fail "Quedó una unidad residual: $unit_path"
   fi
+done
+
+# Remove only the exact CLI symlinks declared in the manifest.
+if [[ "$OWNED_PATH_CLI_CONECTA" == "1" && -L /usr/local/bin/conecta && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" == "$CLI" ]]; then
+  rm -f -- /usr/local/bin/conecta
+elif [[ -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ]]; then
+  info "Se conserva /usr/local/bin/conecta: no coincide con el enlace propio."
+fi
+if [[ "$OWNED_PATH_CLI_CONECTASSH" == "1" && -L /usr/local/bin/conectassh && "$(readlink -f /usr/local/bin/conectassh 2>/dev/null || true)" == "$CLI" ]]; then
+  rm -f -- /usr/local/bin/conectassh
+elif [[ -e /usr/local/bin/conectassh || -L /usr/local/bin/conectassh ]]; then
+  info "Se conserva /usr/local/bin/conectassh: no coincide con el enlace propio."
 fi
 
-python3 - "$INSTALL_DIR" <<'PY'
+# A database is purged only when manifest flags AND PostgreSQL comments prove
+# that both objects were created by this exact installation transaction.
+if $PURGE && [[ "$DB_CREATED_BY_CONECTA" == "1" && "$DB_ROLE_CREATED_BY_CONECTA" == "1" && -n "${INSTALL_ID:-}" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+  db_comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
+  role_comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_authid') FROM pg_authid WHERE rolname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
+  if [[ "$db_comment" == "conecta-ssh-pro:$INSTALL_ID" && "$role_comment" == "conecta-ssh-pro:$INSTALL_ID" ]]; then
+    su - postgres -c "dropdb --if-exists '$DB_NAME'" >/dev/null 2>&1 || fail "No se pudo eliminar la base de datos propia; se conservan los datos restantes."
+    su - postgres -c "dropuser --if-exists '$DB_USER'" >/dev/null 2>&1 || fail "No se pudo eliminar el rol propio de PostgreSQL."
+  else
+    info "PostgreSQL se conserva: los comentarios de propiedad no coinciden con esta instalación."
+  fi
+elif $PURGE; then
+  info "PostgreSQL se conserva: el manifiesto no demuestra propiedad exclusiva de la base y del rol."
+fi
+
+FINAL_STATE=uninstalled
+if $PURGE; then
+  python3 - "$INSTALL_DIR" <<'PY'
 from pathlib import Path
 import shutil,sys
-root=Path(sys.argv[1]).resolve()
-if str(root)!="/opt/sshpanel": raise SystemExit("Unsafe path")
-if root.exists(): shutil.rmtree(root)
-if root.exists(): raise SystemExit("ConectaSSH-PRO payload still exists after removal")
+p=Path(sys.argv[1])
+if str(p)!="/opt/sshpanel" or p.is_symlink() or not p.is_dir():
+    raise SystemExit("Ruta insegura; no se elimina el directorio")
+m=p/".conecta-install-manifest"
+if not m.is_file() or "PRODUCT=ConectaSSH-PRO" not in m.read_text(errors="replace").splitlines():
+    raise SystemExit("Manifiesto de propiedad no válido; no se elimina el directorio")
+shutil.rmtree(p)
 PY
+  info "Datos locales del producto eliminados por solicitud explícita (--purge)."
+else
+  preserved="/opt/sshpanel.preserved.$(date -u +%Y%m%dT%H%M%SZ)"
+  [[ ! -e "$preserved" && ! -L "$preserved" ]] || fail "Destino de preservación ya existe: $preserved"
+  mv -- "$INSTALL_DIR" "$preserved"
+  FINAL_STATE=preserved
+  info "Configuración, credenciales, certificados, llaves, logs y datos preservados en: $preserved"
+  info "La base de datos PostgreSQL se conserva."
+fi
 
-# Verify owned systemd unit files are absent; don't hide incomplete cleanup.
-for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
-  [[ ! -e "/etc/systemd/system/$unit" ]] || fail "Quedó una unidad residual: /etc/systemd/system/$unit"
-done
-
-# Second pass verifies uninstall did not leave a managed login hook behind.
-cleanup_auto_menu_hook
-
-[[ -n "$RESOLV_BACKUP" && -f "$RESOLV_BACKUP" ]] && rm -f "$RESOLV_BACKUP" || true
-systemctl daemon-reload >/dev/null 2>&1 || true
-info "ConectaSSH-PRO desinstalado. Componentes externos y paquetes compartidos conservados."
+if [[ -f "$TXN_MANIFEST" && "$(stat -c '%u' "$TXN_MANIFEST" 2>/dev/null || true)" == "0" ]]; then
+  tmp="$TXN_MANIFEST.tmp"
+  sed -e "s/^STATE=.*/STATE=$FINAL_STATE/" -e 's/^INSTALL_DIR_CREATED=.*/INSTALL_DIR_CREATED=0/' "$TXN_MANIFEST" > "$tmp"
+  chmod 0600 "$tmp"
+  mv -f -- "$tmp" "$TXN_MANIFEST"
+  [[ -f "$STATE_DIR/resources.tsv" && ! -L "$STATE_DIR/resources.tsv" ]] && rm -f -- "$STATE_DIR/resources.tsv"
+fi
+info "ConectaSSH-PRO desinstalado. No se modificaron OpenSSH, sshd_config, puerto 22 ni usuarios SSH."

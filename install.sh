@@ -9,27 +9,6 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 error() { echo -e "${RED}[x]${NC} $*"; exit 1; }
 
 
-# Disable a legacy Conecta login hook from older installations without overwriting backups.
-disable_legacy_login_hook() {
-  local hook="/etc/profile.d/conecta-auto-menu.sh"
-  local backup_dir="$INSTALL_DIR/compat-backups"
-  local backup
-  if [[ ! -e "$hook" && ! -L "$hook" ]]; then
-    return 0
-  fi
-  if ! grep -qE 'conecta|sshpanel|auto_menu' "$hook" 2>/dev/null; then
-    warn "Found $hook but its contents are not recognized; leaving it untouched."
-    return 0
-  fi
-  mkdir -p "$backup_dir"
-  chmod 0700 "$backup_dir"
-  backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
-  mv -- "$hook" "$backup"
-  if [[ ! -L "$backup" ]]; then
-    chmod 0600 "$backup" 2>/dev/null || true
-  fi
-  info "Disabled legacy SSH login hook; preserved at $backup"
-}
 
 # ── config ──────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/sshpanel"
@@ -49,6 +28,14 @@ INSTALL_SUCCESS=false
 INSTALL_STARTED=false
 CLEANUP_RUNNING=false
 GO_ROLLBACK_DIR=""
+MANIFEST_VERSION=3
+INSTALL_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+STATE_DIR="/var/lib/conecta-ssh-pro"
+TXN_MANIFEST="$STATE_DIR/manifest"
+RESOURCE_LEDGER="$STATE_DIR/resources.tsv"
+INSTALL_DIR_CREATED=0
+DB_CREATED_BY_CONECTA=0
+DB_ROLE_CREATED_BY_CONECTA=0
 MKDIR_BIN="$(command -v mkdir 2>/dev/null || true)"
 [[ -n "$MKDIR_BIN" ]] || MKDIR_BIN="/bin/mkdir"
 # ────────────────────────────────────────────────────────────────────────────
@@ -130,14 +117,228 @@ ssh_safety_preflight() {
   # restart sshd, enable UFW, or flush firewall rules.
 }
 
+write_transaction_manifest() {
+  local state="$1" tmp="$STATE_DIR/manifest.tmp"
+  install -d -m 0700 "$STATE_DIR"
+  cat > "$tmp" <<EOF
+PRODUCT=ConectaSSH-PRO
+MANIFEST_VERSION=3
+INSTALL_ID=$INSTALL_ID
+STATE=$state
+INSTALL_DIR=/opt/sshpanel
+ROLLBACK_DIR=$ROLLBACK_DIR
+INSTALL_DIR_CREATED=$INSTALL_DIR_CREATED
+DB_NAME=sshpanel
+DB_USER=sshpanel
+DB_CREATED_BY_CONECTA=$DB_CREATED_BY_CONECTA
+DB_ROLE_CREATED_BY_CONECTA=$DB_ROLE_CREATED_BY_CONECTA
+OWNED_UNIT_SSH_PANEL=1
+OWNED_UNIT_ONLINE_BRIDGE=0
+OWNED_UNIT_DNSTT_REDIRECT=0
+OWNED_PATH_INSTALL_DIR=1
+OWNED_PATH_LOG_TMPFS=1
+OWNED_PATH_CLI_CONECTA=1
+OWNED_PATH_CLI_CONECTASSH=1
+FIREWALL_RULES_CREATED=0
+NETWORK_CONFIGURATION_CHANGED=0
+EOF
+  chmod 0600 "$tmp"
+  mv -f -- "$tmp" "$TXN_MANIFEST"
+}
+register_resource() {
+  local kind="$1" path="$2" target="${3:-}"
+  printf '%s\t%s\t%s\n' "$kind" "$path" "$target" >> "$RESOURCE_LEDGER"
+  chmod 0600 "$RESOURCE_LEDGER"
+}
+resource_path_is_allowed() {
+  case "$1" in
+    /opt/sshpanel|/etc/systemd/system/sshpanel.service|/etc/systemd/system/conecta-online-bridge.service|/etc/systemd/system/multi-user.target.wants/sshpanel.service|/usr/local/bin/conecta|/usr/local/bin/conectassh|sshpanel) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+rollback_transaction_resources() {
+  [[ -f "$TXN_MANIFEST" ]] || return 0
+  local product state kind path target install_id
+  product="$(awk -F= '$1=="PRODUCT"{print substr($0,index($0,"=")+1);exit}' "$TXN_MANIFEST")"
+  install_id="$(awk -F= '$1=="INSTALL_ID"{print $2;exit}' "$TXN_MANIFEST")"
+  [[ -n "$install_id" ]] || install_id="unknown"
+  [[ "$product" == "ConectaSSH-PRO" ]] || { warn "Manifiesto transaccional ajeno; se conserva."; return 1; }
+  state="$(awk -F= '$1=="STATE"{print $2;exit}' "$TXN_MANIFEST")"
+  [[ "$state" == "installing" || "$state" == "rollback_pending" ]] || return 0
+  write_transaction_manifest rollback_pending
+  if [[ -f "$RESOURCE_LEDGER" ]]; then
+    while IFS=$'\t' read -r kind path target; do
+      [[ -n "$path" ]] || continue
+      resource_path_is_allowed "$path" || { warn "Ruta fuera de allowlist en ledger: $path; rollback pendiente."; return 1; }
+      case "$kind" in
+        unit)
+          if [[ -f "$path" && ! -L "$path" ]] && grep -q 'WorkingDirectory=/opt/sshpanel' "$path" 2>/dev/null && grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$path" 2>/dev/null; then
+            systemctl disable --now sshpanel.service >/dev/null 2>&1 || { warn "No se pudo detener sshpanel.service; rollback pendiente y datos conservados."; return 1; }
+            rm -f -- "$path" || { warn "No se pudo retirar la unidad propia; rollback pendiente."; return 1; }
+          elif [[ -e "$path" || -L "$path" ]]; then warn "Unidad conservada; propiedad no demostrada: $path; rollback pendiente."; return 1; fi ;;
+        symlink)
+          if [[ -L "$path" && "$(readlink "$path" 2>/dev/null || true)" == "$target" ]]; then
+            rm -f -- "$path" || { warn "No se pudo retirar el enlace propio: $path"; return 1; }
+          elif [[ -e "$path" || -L "$path" ]]; then warn "Enlace conservado; propiedad no demostrada: $path; rollback pendiente."; return 1; fi ;;
+        directory)
+          if [[ "$path" == "/opt/sshpanel" && "$INSTALL_DIR_CREATED" == "1" && -d "$path" && ! -L "$path" ]]; then
+            python3 - "$path" <<'PY' || { warn "No se pudo retirar el directorio propio; rollback pendiente."; return 1; }
+from pathlib import Path
+import shutil,sys
+p=Path(sys.argv[1])
+if str(p)=="/opt/sshpanel" and not p.is_symlink(): shutil.rmtree(p)
+PY
+          elif [[ -e "$path" || -L "$path" ]]; then warn "Ruta de instalación no coincide con el directorio propio; se conserva."; return 1; fi ;;
+        postgres_database)
+          if [[ "$DB_CREATED_BY_CONECTA" == "1" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+            comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
+            if [[ "$comment" == "conecta-ssh-pro:$install_id" ]]; then su - postgres -c "dropdb --if-exists sshpanel" >/dev/null 2>&1 || { warn "No se pudo revertir la base de datos propia; rollback pendiente."; return 1; }; else warn "Base de datos conservada: propiedad no demostrada por comentario."; fi
+          fi ;;
+        postgres_role)
+          if [[ "$DB_ROLE_CREATED_BY_CONECTA" == "1" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+            comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_authid') FROM pg_authid WHERE rolname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
+            if [[ "$comment" == "conecta-ssh-pro:$install_id" ]]; then su - postgres -c "dropuser --if-exists sshpanel" >/dev/null 2>&1 || { warn "No se pudo revertir el rol propio; rollback pendiente."; return 1; }; else warn "Rol PostgreSQL conservado: propiedad no demostrada por comentario."; fi
+          fi ;;
+      esac
+    done < <(tac "$RESOURCE_LEDGER")
+  fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  write_transaction_manifest rolled_back
+  rm -f -- "$RESOURCE_LEDGER"
+}
+recover_previous_transaction() {
+  [[ -f "$TXN_MANIFEST" && ! -L "$TXN_MANIFEST" ]] || return 0
+  [[ "$(stat -c '%u' "$TXN_MANIFEST" 2>/dev/null || true)" == "0" ]] || { warn "Manifiesto transaccional no pertenece a root; se conserva."; return 0; }
+  local manifest_mode
+  manifest_mode="$(stat -c '%a' "$TXN_MANIFEST" 2>/dev/null || echo 777)"
+  (( (8#$manifest_mode & 077) == 0 )) || { warn "Permisos inseguros en manifiesto transaccional; se conserva."; return 0; }
+  if [[ -e "$RESOURCE_LEDGER" || -L "$RESOURCE_LEDGER" ]]; then
+    [[ -f "$RESOURCE_LEDGER" && ! -L "$RESOURCE_LEDGER" && "$(stat -c '%u' "$RESOURCE_LEDGER" 2>/dev/null || true)" == "0" ]] || { warn "Ledger de recursos no verificable; se conserva."; return 0; }
+    local ledger_mode
+    ledger_mode="$(stat -c '%a' "$RESOURCE_LEDGER" 2>/dev/null || echo 777)"
+    (( (8#$ledger_mode & 077) == 0 )) || { warn "Permisos inseguros en ledger; se conserva."; return 0; }
+  fi
+  local product state
+  product="$(awk -F= '$1=="PRODUCT"{print substr($0,index($0,"=")+1);exit}' "$TXN_MANIFEST")"
+  state="$(awk -F= '$1=="STATE"{print $2;exit}' "$TXN_MANIFEST")"
+  [[ "$product" == "ConectaSSH-PRO" ]] || { warn "Manifiesto previo no reconocido; no se modifica."; return 0; }
+  case "$state" in
+    installing|rollback_pending)
+      INSTALL_ID="$(awk -F= '$1=="INSTALL_ID"{print $2;exit}' "$TXN_MANIFEST")"
+      [[ "$INSTALL_ID" =~ ^[A-Za-z0-9._-]+$ ]] || { warn "INSTALL_ID inválido; no se modifica el estado anterior."; return 0; }
+      ROLLBACK_DIR="$(awk -F= '$1=="ROLLBACK_DIR"{print $2;exit}' "$TXN_MANIFEST")"
+      if [[ -n "$ROLLBACK_DIR" && "$ROLLBACK_DIR" != /var/tmp/sshpanel-rollback.* ]]; then warn "Ruta de snapshot inválida; no se restaura ni elimina."; ROLLBACK_DIR=""; fi
+      INSTALL_DIR_CREATED="$(awk -F= '$1=="INSTALL_DIR_CREATED"{print $2;exit}' "$TXN_MANIFEST")"
+      [[ "$INSTALL_DIR_CREATED" == "1" ]] || INSTALL_DIR_CREATED=0
+      DB_CREATED_BY_CONECTA="$(awk -F= '$1=="DB_CREATED_BY_CONECTA"{print $2;exit}' "$TXN_MANIFEST")"
+      [[ "$DB_CREATED_BY_CONECTA" == "1" ]] || DB_CREATED_BY_CONECTA=0
+      DB_ROLE_CREATED_BY_CONECTA="$(awk -F= '$1=="DB_ROLE_CREATED_BY_CONECTA"{print $2;exit}' "$TXN_MANIFEST")"
+      [[ "$DB_ROLE_CREATED_BY_CONECTA" == "1" ]] || DB_ROLE_CREATED_BY_CONECTA=0
+      warn "Se detectó una instalación interrumpida ($state). Recuperando únicamente recursos registrados..."
+      rollback_transaction_resources || error "No se pudo recuperar el estado previo de forma segura."
+      restore_rollback_snapshot
+      if [[ -n "$ROLLBACK_DIR" && -d "$ROLLBACK_DIR" ]]; then rm -rf -- "$ROLLBACK_DIR"; fi
+      ROLLBACK_DIR=""
+      INSTALL_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+      INSTALL_DIR_CREATED=0
+      DB_CREATED_BY_CONECTA=0
+      DB_ROLE_CREATED_BY_CONECTA=0 ;;
+    rolled_back|installed|uninstalled|preserved) ;;
+    *) warn "Estado transaccional desconocido ($state); se conserva para revisión." ;;
+  esac
+}
+
+recover_corrupt_install() {
+  [[ -e "$INSTALL_DIR" || -L "$INSTALL_DIR" ]] || return 0
+  [[ -d "$INSTALL_DIR" && ! -L "$INSTALL_DIR" ]] || return 0
+  local marker_owned=false unit_path="/etc/systemd/system/sshpanel.service"
+  if [[ -f "$INSTALL_DIR/.conecta-install-manifest" && ! -L "$INSTALL_DIR/.conecta-install-manifest" ]] &&
+     [[ "$(stat -c '%u' "$INSTALL_DIR/.conecta-install-manifest" 2>/dev/null || true)" == "0" ]] &&
+     (( (8#$(stat -c '%a' "$INSTALL_DIR/.conecta-install-manifest" 2>/dev/null || echo 777) & 077) == 0 )) &&
+     grep -qx 'PRODUCT=ConectaSSH-PRO' "$INSTALL_DIR/.conecta-install-manifest"; then
+    marker_owned=true
+  elif [[ -f "$TXN_MANIFEST" && ! -L "$TXN_MANIFEST" && -f "$RESOURCE_LEDGER" && ! -L "$RESOURCE_LEDGER" ]] &&
+       [[ "$(stat -c '%u' "$TXN_MANIFEST" 2>/dev/null || true)" == "0" ]] &&
+       [[ "$(stat -c '%u' "$RESOURCE_LEDGER" 2>/dev/null || true)" == "0" ]] &&
+       grep -qx 'PRODUCT=ConectaSSH-PRO' "$TXN_MANIFEST" &&
+       grep -qx $'directory\t/opt/sshpanel\t' "$RESOURCE_LEDGER" &&
+       grep -qx 'STATE=installed' "$TXN_MANIFEST"; then
+    marker_owned=true
+  fi
+  $marker_owned || return 0
+
+  if [[ -x "$INSTALL_DIR/sshpanel" && -f "$unit_path" && ! -L "$unit_path" ]] &&
+     grep -q 'WorkingDirectory=/opt/sshpanel' "$unit_path" &&
+     grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$unit_path"; then
+    return 0
+  fi
+
+  if [[ -e "$unit_path" || -L "$unit_path" ]]; then
+    [[ -f "$unit_path" && ! -L "$unit_path" ]] &&
+      grep -q 'WorkingDirectory=/opt/sshpanel' "$unit_path" &&
+      grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$unit_path" ||
+      error "Instalación corrupta, pero la unidad sshpanel.service no tiene propiedad demostrable; se conserva todo."
+    systemctl disable --now sshpanel.service >/dev/null 2>&1 ||
+      error "No se pudo detener la unidad propia; se conserva la instalación para recuperación."
+    rm -f -- "$unit_path"
+  elif systemctl is-active --quiet sshpanel.service 2>/dev/null; then
+    error "sshpanel.service está activo sin una unidad propia verificable; no se altera."
+  fi
+
+  for cli_path in /usr/local/bin/conecta /usr/local/bin/conectassh; do
+    if [[ -L "$cli_path" && "$(readlink -f "$cli_path" 2>/dev/null || true)" == "$INSTALL_DIR/conectassh_cli.py" ]]; then
+      rm -f -- "$cli_path"
+    elif [[ -e "$cli_path" || -L "$cli_path" ]]; then
+      error "Instalación corrupta; se conserva todo porque $cli_path no coincide con el enlace propio."
+    fi
+  done
+
+  local recovery="/opt/sshpanel.recovery.$(date -u +%Y%m%dT%H%M%SZ)"
+  [[ ! -e "$recovery" && ! -L "$recovery" ]] || error "Destino de recuperación existente: $recovery"
+  mv -- "$INSTALL_DIR" "$recovery"
+  if [[ -f "$TXN_MANIFEST" && "$(stat -c '%u' "$TXN_MANIFEST" 2>/dev/null || true)" == "0" ]]; then
+    local tmp="$TXN_MANIFEST.tmp"
+    sed -e 's/^STATE=.*/STATE=preserved/' -e 's/^INSTALL_DIR_CREATED=.*/INSTALL_DIR_CREATED=0/' "$TXN_MANIFEST" > "$tmp"
+    chmod 0600 "$tmp"
+    mv -f -- "$tmp" "$TXN_MANIFEST"
+  fi
+  rm -f -- "$RESOURCE_LEDGER"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  warn "Instalación corrupta recuperada sin purgar datos. Configuración y credenciales preservadas en $recovery"
+  warn "La base de datos PostgreSQL se conserva; no se eliminan usuarios ni datos existentes."
+}
+
 preflight_checks() {
   info "[PRECHECK] Validando entorno..."
   [[ "$EUID" -eq 0 ]] || error "El instalador debe ejecutarse como root."
   require_systemd
   command -v ss >/dev/null 2>&1 || error "El comando ss es obligatorio para proteger SSH."
   ssh_safety_preflight
+  recover_previous_transaction
+  recover_corrupt_install
   case "$(uname -m)" in x86_64|aarch64) ;; *) error "Arquitectura no soportada: $(uname -m)." ;; esac
-  [[ -e "$INSTALL_DIR" || -e "/etc/systemd/system/${SERVICE_NAME}.service" ]] && error "Ya existe una instalación de Conecta SSH. Se requiere una VPS limpia."
+  if [[ -e "$INSTALL_DIR" || -L "$INSTALL_DIR" ]]; then
+    if [[ -d "$INSTALL_DIR" && ! -L "$INSTALL_DIR" && -f "$INSTALL_DIR/.conecta-install-manifest" && ! -L "$INSTALL_DIR/.conecta-install-manifest" ]] &&
+       [[ "$(stat -c '%u' "$INSTALL_DIR/.conecta-install-manifest" 2>/dev/null || true)" == "0" ]] &&
+       (( (8#$(stat -c '%a' "$INSTALL_DIR/.conecta-install-manifest" 2>/dev/null || echo 777) & 077) == 0 )) &&
+       grep -qx 'PRODUCT=ConectaSSH-PRO' "$INSTALL_DIR/.conecta-install-manifest" &&
+       grep -qx 'STATE=installed' "$INSTALL_DIR/.conecta-install-manifest" &&
+       [[ -x "$INSTALL_DIR/sshpanel" && -f "/etc/systemd/system/${SERVICE_NAME}.service" ]] &&
+       grep -q 'WorkingDirectory=/opt/sshpanel' "/etc/systemd/system/${SERVICE_NAME}.service" &&
+       grep -q 'ExecStart=/opt/sshpanel/sshpanel' "/etc/systemd/system/${SERVICE_NAME}.service"; then
+      info "Instalación válida detectada: se ejecutará el actualizador idempotente en lugar de abortar o recrear PostgreSQL."
+      [[ -f "$SCRIPT_DIR/update.sh" ]] || error "No existe update.sh junto al instalador; no se modificó la instalación."
+      exec env UPDATE_SOURCE=local bash "$SCRIPT_DIR/update.sh"
+    fi
+    error "Existe $INSTALL_DIR pero no se puede demostrar que sea una instalación válida. Se conserva íntegramente para recuperación manual; no se sobrescribe ni se elimina."
+  fi
+  [[ ! -e "/etc/systemd/system/${SERVICE_NAME}.service" && ! -L "/etc/systemd/system/${SERVICE_NAME}.service" ]] || error "La unidad sshpanel.service existe sin instalación verificada; se conserva."
+  [[ ! -e "/etc/systemd/system/conecta-online-bridge.service" && ! -L "/etc/systemd/system/conecta-online-bridge.service" ]] || error "La unidad conecta-online-bridge.service ya existe; no se sobrescribirá."
+  [[ ! -e /etc/systemd/system/multi-user.target.wants/sshpanel.service && ! -L /etc/systemd/system/multi-user.target.wants/sshpanel.service ]] || error "Existe un enlace systemd sshpanel previo; se conserva."
+  if "$SYSTEMCTL_BIN" cat sshpanel.service >/dev/null 2>&1; then error "systemd ya conoce sshpanel.service fuera del manifiesto; se conserva y se aborta."; fi
+  if "$SYSTEMCTL_BIN" cat conecta-online-bridge.service >/dev/null 2>&1; then error "systemd ya conoce conecta-online-bridge.service; se conserva y se aborta."; fi
+  [[ ! -e /usr/local/bin/conecta && ! -L /usr/local/bin/conecta ]] || error "Existe /usr/local/bin/conecta; se conserva y se aborta antes de modificar el sistema."
+  [[ ! -e /usr/local/bin/conectassh && ! -L /usr/local/bin/conectassh ]] || error "Existe /usr/local/bin/conectassh; se conserva y se aborta antes de modificar el sistema."
   local disk_gb ram_mb
   disk_gb="$(df -BG --output=avail / | tail -1 | tr -dc "0-9")"
   [[ "$disk_gb" =~ ^[0-9]+$ ]] || error "No se pudo determinar el espacio libre de /."
@@ -263,7 +464,7 @@ init_postgresql_if_needed() {
       data_dir="$(postgres_data_dir)"
       if [[ ! -s "$data_dir/PG_VERSION" ]]; then
         mkdir -p "$data_dir"
-        chown -R postgres:postgres "$(dirname "$data_dir")"
+        chown postgres:postgres "$data_dir"
         if command -v runuser >/dev/null 2>&1; then
           runuser -u postgres -- initdb -D "$data_dir" >/dev/null 2>&1 || true
         else
@@ -282,8 +483,12 @@ init_postgresql_if_needed() {
 start_enable_postgresql() {
   local started=false svc
   for svc in postgresql postgresql.service; do
+    if "$SYSTEMCTL_BIN" is-active --quiet "$svc" 2>/dev/null; then
+      started=true
+      break
+    fi
     if "$SYSTEMCTL_BIN" start "$svc" >/dev/null 2>&1; then
-      "$SYSTEMCTL_BIN" enable "$svc" >/dev/null 2>&1 || true
+      # Start only when required; preserve the administrator's enable/disable policy.
       started=true
       break
     fi
@@ -294,36 +499,6 @@ start_enable_postgresql() {
   $started || warn "  Could not start PostgreSQL automatically; continuing in case it is already running."
 }
 
-ensure_log_tmpfs_mount() {
-  local log_dir="${INSTALL_DIR}/logs"
-  local opts="rw,nosuid,nodev,noexec,noatime,nofail,size=${LOG_TMPFS_SIZE},mode=0755"
-  local tmp_fstab
-
-  mkdir -p "$log_dir"
-
-  if [[ -f /etc/fstab ]]; then
-    cp /etc/fstab "/etc/fstab.sshpanel.bak.$(date +%s)" 2>/dev/null || true
-    tmp_fstab="$(mktemp)"
-    awk -v mp="$log_dir" '!(($1 == "tmpfs") && ($2 == mp) && ($3 == "tmpfs")) {print}' /etc/fstab > "$tmp_fstab"
-    printf 'tmpfs %s tmpfs %s 0 0\n' "$log_dir" "$opts" >> "$tmp_fstab"
-    cat "$tmp_fstab" > /etc/fstab
-    rm -f "$tmp_fstab"
-    info "  Log RAM disk automount saved in /etc/fstab: $log_dir (${LOG_TMPFS_SIZE})"
-  else
-    warn "  /etc/fstab not found; service startup fallback will mount $log_dir as tmpfs"
-  fi
-
-  "${SYSTEMCTL_BIN:-systemctl}" daemon-reload >/dev/null 2>&1 || true
-  if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$log_dir"; then
-    mount -o "remount,size=${LOG_TMPFS_SIZE},mode=0755" "$log_dir" >/dev/null 2>&1 || true
-  else
-    mount "$log_dir" >/dev/null 2>&1 || mount -t tmpfs -o "size=${LOG_TMPFS_SIZE},mode=0755" tmpfs "$log_dir" >/dev/null 2>&1 || \
-      warn "  Could not mount $log_dir as tmpfs now; service startup fallback will try again"
-  fi
-
-  touch "$log_dir/panel.log" >/dev/null 2>&1 || true
-  chmod 0644 "$log_dir/panel.log" >/dev/null 2>&1 || true
-}
 
 echo -e "\n${GREEN}══════════════════════════════════════════${NC}"
 echo -e "${GREEN}   SSH Panel + Xray-core  ·  Installer     ${NC}"
@@ -334,53 +509,58 @@ create_rollback_snapshot() {
   mkdir -p "$ROLLBACK_DIR/files"
   : > "$ROLLBACK_DIR/manifest"
   local path key
-  # Never snapshot the legacy login hook: rollback must not re-enable it.
-  for path in /etc/fstab /etc/resolv.conf /etc/profile.d/go.sh /etc/systemd/system/sshpanel.service /etc/systemd/system/sshpanel-dnstt-redirect.service /usr/local/sbin/sshpanel-dnstt-redirect.sh /usr/local/bin/conecta /usr/local/bin/conectassh; do
+  for path in /etc/systemd/system/sshpanel.service /etc/systemd/system/conecta-online-bridge.service /usr/local/bin/conecta /usr/local/bin/conectassh; do
     key="$(printf '%s' "$path" | sed 's#^/##; s#[/]#_#g')"
     if [[ -e "$path" || -L "$path" ]]; then
       printf 'EXISTS\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"
       tar -C / -czf "$ROLLBACK_DIR/files/${key}.tar.gz" "${path#/}"
-    else
-      printf 'ABSENT\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"
-    fi
+    else printf 'ABSENT\t%s\t%s\n' "$path" "$key" >> "$ROLLBACK_DIR/manifest"; fi
   done
   info "  Snapshot de rollback creado: $ROLLBACK_DIR"
 }
-
 restore_rollback_snapshot() {
   [[ -n "$ROLLBACK_DIR" && -f "$ROLLBACK_DIR/manifest" ]] || return 0
-  warn "Restaurando configuraciones previas..."
-  local state path key archive
+  warn "Verificando snapshot sin sobrescribir recursos ajenos..."
+  local state path key target
   while IFS=$'\t' read -r state path key; do
     [[ -n "$path" ]] || continue
-    rm -rf -- "$path"
+    case "$path" in
+      /etc/systemd/system/sshpanel.service|/etc/systemd/system/conecta-online-bridge.service|/usr/local/bin/conecta|/usr/local/bin/conectassh) ;;
+      *) warn "Ruta no permitida en snapshot: $path; se conserva."; continue ;;
+    esac
     if [[ "$state" == "EXISTS" ]]; then
-      archive="$ROLLBACK_DIR/files/${key}.tar.gz"
-      [[ -f "$archive" ]] && tar -C / -xzf "$archive"
+      # Preflight should have refused these resources. Never overwrite a path
+      # that existed before the transaction; keep it for an administrator.
+      warn "Se conserva el recurso preexistente capturado en snapshot: $path"
+      continue
     fi
+    case "$path" in
+      /etc/systemd/system/sshpanel.service)
+        if [[ -f "$path" && ! -L "$path" ]] && grep -q 'WorkingDirectory=/opt/sshpanel' "$path" 2>/dev/null && grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$path" 2>/dev/null; then rm -f -- "$path"; elif [[ -e "$path" || -L "$path" ]]; then warn "Unidad no reconocida conservada: $path"; fi ;;
+      /etc/systemd/system/conecta-online-bridge.service)
+        if [[ -f "$path" && ! -L "$path" ]] && grep -q 'conecta-online-bridge' "$path" 2>/dev/null; then rm -f -- "$path"; elif [[ -e "$path" || -L "$path" ]]; then warn "Unidad no reconocida conservada: $path"; fi ;;
+      /usr/local/bin/conecta|/usr/local/bin/conectassh)
+        if [[ -L "$path" && "$(readlink "$path" 2>/dev/null || true)" == "/opt/sshpanel/conectassh_cli.py" ]]; then rm -f -- "$path"; elif [[ -e "$path" || -L "$path" ]]; then warn "Enlace no reconocido conservado: $path"; fi ;;
+    esac
   done < "$ROLLBACK_DIR/manifest"
-  "${SYSTEMCTL_BIN:-systemctl}" daemon-reload >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
 }
-
 cleanup() {
-  local rc="${1:-0}"
+  local rc="${1:-0}" rollback_ok=true
   [[ "$CLEANUP_RUNNING" == "true" ]] && return 0
   CLEANUP_RUNNING=true
   if [[ "$INSTALL_SUCCESS" != "true" && "$INSTALL_STARTED" == "true" ]]; then
-    warn "Instalación fallida. Ejecutando rollback..."
-    "${SYSTEMCTL_BIN:-systemctl}" stop sshpanel.service sshpanel-dnstt-redirect.service >/dev/null 2>&1 || true
-    "${SYSTEMCTL_BIN:-systemctl}" disable sshpanel.service sshpanel-dnstt-redirect.service >/dev/null 2>&1 || true
-    if mountpoint -q "$INSTALL_DIR/logs" 2>/dev/null; then
-      umount "$INSTALL_DIR/logs" >/dev/null 2>&1 || true
+    warn "Instalación fallida. Ejecutando rollback transaccional..."
+    write_transaction_manifest rollback_pending || warn "No se pudo actualizar el estado del manifiesto; se intentará rollback con el último registro durable."
+    if rollback_transaction_resources; then
+      restore_rollback_snapshot
+    else
+      warn "Rollback incompleto: se conservan el ledger y el snapshot para recuperación posterior."
+      rollback_ok=false
     fi
-    restore_rollback_snapshot
-    if [[ -n "$GO_ROLLBACK_DIR" && -d "$GO_ROLLBACK_DIR" ]]; then
-      rm -rf /usr/local/go
-      mv "$GO_ROLLBACK_DIR" /usr/local/go
-    fi
-    rm -rf "$INSTALL_DIR"
   fi
-  rm -rf /tmp/xray.*.zip /tmp/xray-extract.* /tmp/go.tar.gz "$ROLLBACK_DIR"
+  rm -f /tmp/go.tar.gz
+  if [[ "$rollback_ok" == "true" && -n "$ROLLBACK_DIR" && -d "$ROLLBACK_DIR" ]]; then rm -rf -- "$ROLLBACK_DIR"; fi
   return "$rc"
 }
 
@@ -412,10 +592,38 @@ info "  Package manager: $PKG_MANAGER"
 info "  Service manager: systemd"
 validate_supported_os
 preflight_checks
-# Disable the legacy hook before snapshotting so a failed install cannot restore it.
-disable_legacy_login_hook
-create_rollback_snapshot
 INSTALL_STARTED=true
+install -d -m 0700 "$STATE_DIR"
+: > "$RESOURCE_LEDGER"
+chmod 0600 "$RESOURCE_LEDGER"
+INSTALL_DIR_CREATED=1
+write_transaction_manifest installing
+register_resource directory "$INSTALL_DIR"
+create_rollback_snapshot
+write_transaction_manifest installing
+mkdir -p "$INSTALL_DIR"
+cat > "$INSTALL_DIR/.conecta-install-manifest" <<EOF
+PRODUCT=ConectaSSH-PRO
+MANIFEST_VERSION=3
+INSTALL_ID=$INSTALL_ID
+STATE=installing
+INSTALL_DIR=/opt/sshpanel
+INSTALL_DIR_CREATED=1
+DB_NAME=sshpanel
+DB_USER=sshpanel
+DB_CREATED_BY_CONECTA=0
+DB_ROLE_CREATED_BY_CONECTA=0
+OWNED_UNIT_SSH_PANEL=1
+OWNED_UNIT_ONLINE_BRIDGE=0
+OWNED_UNIT_DNSTT_REDIRECT=0
+OWNED_PATH_INSTALL_DIR=1
+OWNED_PATH_LOG_TMPFS=1
+OWNED_PATH_CLI_CONECTA=1
+OWNED_PATH_CLI_CONECTASSH=1
+FIREWALL_RULES_CREATED=0
+NETWORK_CONFIGURATION_CHANGED=0
+EOF
+chmod 0600 "$INSTALL_DIR/.conecta-install-manifest"
 
 # ── 2. System dependencies ───────────────────────────────────────────────────
 info "[2/10] Installing system packages…"
@@ -445,22 +653,19 @@ if $NEED_GO; then
   GO_URL="https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz"
   info "  Downloading $GO_URL"
   wget -q --show-progress -O /tmp/go.tar.gz "$GO_URL"
-  if [[ -d /usr/local/go ]]; then
-    GO_ROLLBACK_DIR="$ROLLBACK_DIR/previous-go"
-    mv /usr/local/go "$GO_ROLLBACK_DIR"
-  fi
-  tar -C /usr/local -xzf /tmp/go.tar.gz
+  GO_TOOLCHAIN_DIR="$ROLLBACK_DIR/go-toolchain"
+  mkdir -p "$GO_TOOLCHAIN_DIR"
+  tar -C "$GO_TOOLCHAIN_DIR" --strip-components=1 -xzf /tmp/go.tar.gz
   rm -f /tmp/go.tar.gz
   # Go is added to PATH for this installer process only; do not leave a global profile file behind.
 fi
 
-export PATH=$PATH:/usr/local/go/bin
+if [[ -x "${GO_TOOLCHAIN_DIR:-}/bin/go" ]]; then export PATH="${GO_TOOLCHAIN_DIR}/bin:$PATH"; elif [[ -x /usr/local/go/bin/go ]]; then export PATH="/usr/local/go/bin:$PATH"; fi
 go version
 
 # ── 4. Directory layout ──────────────────────────────────────────────────────
 info "[4/10] Setting up ${INSTALL_DIR}…"
 mkdir -p "$INSTALL_DIR/keys" "$INSTALL_DIR/logs"
-ensure_log_tmpfs_mount
 
 # ── 5. Build SSH panel binary ────────────────────────────────────────────────
 info "[5/10] Building SSH Panel binary…"
@@ -487,14 +692,11 @@ info "  Binary: $INSTALL_DIR/sshpanel"
 info "  Build commit: $BUILD_COMMIT ($BUILD_BRANCH)"
 install -m 700 "$SCRIPT_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
 install -m 700 "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+if [[ ( -e /usr/local/bin/conectassh || -L /usr/local/bin/conectassh ) && "$(readlink -f /usr/local/bin/conectassh 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then error "Existe /usr/local/bin/conectassh ajeno; no se sobrescribe."; fi
+register_resource symlink /usr/local/bin/conectassh "$INSTALL_DIR/conectassh_cli.py"
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
-if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
-  CONECTA_BACKUP="/usr/local/bin/conecta.backup.$(date +%s%N)"
-  mv /usr/local/bin/conecta "$CONECTA_BACKUP"
-  warn "  Previous conecta command saved to $CONECTA_BACKUP"
-fi
+register_resource symlink /usr/local/bin/conecta "$INSTALL_DIR/conectassh_cli.py"
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
-disable_legacy_login_hook
 # CRITICAL SSH SAFETY: never install a login-shell hook automatically.
 # The CLI is launched explicitly with `conecta`; login must stay independent.
 # Never modify /etc/profile.d, sshd, the SSH port, or existing sessions here.
@@ -586,15 +788,43 @@ if [[ ${#DB_PASS} -lt 32 ]]; then
   DB_PASS=$(openssl rand -hex 16 2>/dev/null || date +%s%N)
 fi
 
+ROLE_EXISTS="$(su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='sshpanel'\"" 2>/dev/null | tr -d '[:space:]' || true)"
+DB_EXISTS="$(su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='sshpanel'\"" 2>/dev/null | tr -d '[:space:]' || true)"
+if [[ "$ROLE_EXISTS" != "1" ]]; then
+  DB_ROLE_CREATED_BY_CONECTA=1
+  register_resource postgres_role sshpanel
+  write_transaction_manifest installing
+  sed -i 's/^DB_ROLE_CREATED_BY_CONECTA=.*/DB_ROLE_CREATED_BY_CONECTA=1/' "$INSTALL_DIR/.conecta-install-manifest"
+fi
+if [[ "$DB_EXISTS" != "1" ]]; then
+  DB_CREATED_BY_CONECTA=1
+  register_resource postgres_database sshpanel
+  write_transaction_manifest installing
+  sed -i 's/^DB_CREATED_BY_CONECTA=.*/DB_CREATED_BY_CONECTA=1/' "$INSTALL_DIR/.conecta-install-manifest"
+fi
+
 su -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'\" | grep -q 1 || \
        psql -c \"CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';\"" postgres
 # Reinstall-safe: if the role already existed, make the new .env password valid.
+if [[ "$DB_ROLE_CREATED_BY_CONECTA" == "1" ]]; then
+  su - postgres -c "psql -c \"COMMENT ON ROLE sshpanel IS 'conecta-ssh-pro:$INSTALL_ID';\""
+fi
 su -c "psql -c \"ALTER USER ${DB_USER} WITH PASSWORD '${DB_PASS}';\"" postgres
 
 su -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'\" | grep -q 1 || \
        psql -c \"CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};\"" postgres
 # Reinstall-safe: if the database already existed, make sshpanel its owner.
+if [[ "$DB_CREATED_BY_CONECTA" == "1" ]]; then
+  su - postgres -c "psql -c \"COMMENT ON DATABASE sshpanel IS 'conecta-ssh-pro:$INSTALL_ID';\""
+fi
 su -c "psql -c \"ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};\"" postgres
+
+# Verify the same TCP/password path the application uses before changing schema.
+# This prevents a superficially successful install with unusable PostgreSQL credentials.
+command -v psql >/dev/null 2>&1 || error "psql no está disponible tras instalar PostgreSQL."
+if ! PGPASSWORD="$DB_PASS" psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -tAc 'SELECT 1' >/dev/null 2>&1; then
+  error "No se pudo autenticar contra PostgreSQL usando las credenciales que utilizará CONECTA. Se inicia rollback y se conserva toda base de datos preexistente."
+fi
 
 su -c "psql -d ${DB_NAME} -c \"
 CREATE TABLE IF NOT EXISTS ssh_users (
@@ -848,6 +1078,7 @@ info "[9/10] Public protocols remain disabled until explicitly configured."
 
 # ── 10. Systemd service ──────────────────────────────────────────────────────
 info "[10/10] Creating systemd service '${SERVICE_NAME}'…"
+register_resource unit "/etc/systemd/system/${SERVICE_NAME}.service"
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=SSH Panel + Xray-core Server
@@ -876,6 +1107,7 @@ WantedBy=multi-user.target
 EOF
 
 "$SYSTEMCTL_BIN" daemon-reload
+register_resource symlink /etc/systemd/system/multi-user.target.wants/sshpanel.service ../sshpanel.service
 "$SYSTEMCTL_BIN" enable  "$SERVICE_NAME"
 "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"
 
@@ -900,26 +1132,32 @@ echo -e "  API token + DB credentials stored in: ${INSTALL_DIR}/.env"
 echo -e "  Logs: journalctl -u ${SERVICE_NAME} -f"
 echo -e "        tail -f ${INSTALL_DIR}/logs/panel.log"
 echo ""
-INSTALL_SUCCESS=true
 echo -e "${YELLOW}View/rotate the API password later with: sudo conectassh api-password show|change${NC}"
 echo ""
 "$SYSTEMCTL_BIN" status "$SERVICE_NAME" --no-pager -l || true
 
-# Ownership manifest consumed by the professional uninstaller. It intentionally
-# does not claim ownership of shared OS packages or pre-existing databases.
 cat > "$INSTALL_DIR/.conecta-install-manifest" <<EOF
 PRODUCT=ConectaSSH-PRO
+MANIFEST_VERSION=3
+INSTALL_ID=$INSTALL_ID
+STATE=installed
 INSTALL_DIR=/opt/sshpanel
+INSTALL_DIR_CREATED=1
 DB_NAME=sshpanel
 DB_USER=sshpanel
-DB_CREATED_BY_CONECTA=0
-DB_ROLE_CREATED_BY_CONECTA=0
-RESOLVED_WAS_ACTIVE=0
-RESOLV_LINK_TARGET=
-RESOLV_BACKUP=
-FSTAB_TMPFS_ADDED=1
-UFW_53_ADDED=0
-FIREWALLD_53_ADDED=0
-CONECTA_BACKUP=${CONECTA_BACKUP:-}
+DB_CREATED_BY_CONECTA=$DB_CREATED_BY_CONECTA
+DB_ROLE_CREATED_BY_CONECTA=$DB_ROLE_CREATED_BY_CONECTA
+OWNED_UNIT_SSH_PANEL=1
+OWNED_UNIT_ONLINE_BRIDGE=0
+OWNED_UNIT_DNSTT_REDIRECT=0
+OWNED_PATH_INSTALL_DIR=1
+OWNED_PATH_LOG_TMPFS=1
+OWNED_PATH_CLI_CONECTA=1
+OWNED_PATH_CLI_CONECTASSH=1
+FIREWALL_RULES_CREATED=0
+NETWORK_CONFIGURATION_CHANGED=0
 EOF
-chmod 600 "$INSTALL_DIR/.conecta-install-manifest"
+chmod 0600 "$INSTALL_DIR/.conecta-install-manifest"
+write_transaction_manifest installed
+INSTALL_SUCCESS=true
+info "Manifiesto transaccional confirmado: $TXN_MANIFEST"

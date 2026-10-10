@@ -89,22 +89,8 @@ ssh_safety_preflight() {
 
 ssh_safety_preflight
 
-# Retire legacy login hooks immediately, before fetching/building/stopping services.
-# This also protects installations where a prior release left the hook behind.
-# Remove the recognized legacy Conecta login hook; automatic login menus are unsupported.
-remove_legacy_login_hook() {
-  local hook="/etc/profile.d/conecta-auto-menu.sh"
-  [[ -e "$hook" || -L "$hook" ]] || return 0
-  if grep -qE 'conecta|sshpanel|auto_menu|CONECTA_AUTO_MENU_RUNNING' "$hook" 2>/dev/null; then
-    rm -f -- "$hook"
-    info "  Removed legacy Conecta SSH login hook."
-  else
-    warn "  Unrecognized file at $hook; preserved."
-  fi
-}
-remove_legacy_login_hook
-# Remove the retired helper from installations created by older releases.
-rm -f -- "$INSTALL_DIR/auto-menu.sh"
+# Standard updates do not mutate global profile hooks or delete legacy files.
+remove_legacy_login_hook() { warn "Hook de login conservado; las actualizaciones no modifican /etc/profile.d."; return 0; }
 
 # Cross-distro helpers -------------------------------------------------------
 PKG_MANAGER=""
@@ -212,36 +198,6 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || error "Required command not found: $1"
 }
 
-ensure_log_tmpfs_mount() {
-  local log_dir="${INSTALL_DIR}/logs"
-  local opts="rw,nosuid,nodev,noexec,noatime,nofail,size=${LOG_TMPFS_SIZE},mode=0755"
-  local tmp_fstab
-
-  mkdir -p "$log_dir"
-
-  if [[ -f /etc/fstab ]]; then
-    cp /etc/fstab "/etc/fstab.sshpanel.bak.$(date +%s)" 2>/dev/null || true
-    tmp_fstab="$(mktemp)"
-    awk -v mp="$log_dir" '!(($1 == "tmpfs") && ($2 == mp) && ($3 == "tmpfs")) {print}' /etc/fstab > "$tmp_fstab"
-    printf 'tmpfs %s tmpfs %s 0 0\n' "$log_dir" "$opts" >> "$tmp_fstab"
-    cat "$tmp_fstab" > /etc/fstab
-    rm -f "$tmp_fstab"
-    info "  Log RAM disk automount saved in /etc/fstab: $log_dir (${LOG_TMPFS_SIZE})"
-  else
-    warn "  /etc/fstab not found; service startup fallback will mount $log_dir as tmpfs"
-  fi
-
-  "${SYSTEMCTL_BIN:-systemctl}" daemon-reload >/dev/null 2>&1 || true
-  if command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$log_dir"; then
-    mount -o "remount,size=${LOG_TMPFS_SIZE},mode=0755" "$log_dir" >/dev/null 2>&1 || true
-  else
-    mount "$log_dir" >/dev/null 2>&1 || mount -t tmpfs -o "size=${LOG_TMPFS_SIZE},mode=0755" tmpfs "$log_dir" >/dev/null 2>&1 || \
-      warn "  Could not mount $log_dir as tmpfs now; service startup fallback will try again"
-  fi
-
-  touch "$log_dir/panel.log" >/dev/null 2>&1 || true
-  chmod 0644 "$log_dir/panel.log" >/dev/null 2>&1 || true
-}
 
 install_git_if_missing() {
   if command -v git >/dev/null 2>&1; then
@@ -327,14 +283,14 @@ install_go_if_needed() {
     info "  Downloading Go ${go_version} (${goarch})..."
     need_cmd wget
     wget -q --show-progress -O /tmp/go.tar.gz "$go_url"
-    rm -rf /usr/local/go
-    tar -C /usr/local -xzf /tmp/go.tar.gz
+    GO_TOOLCHAIN_DIR="${TMPDIR:-/tmp}/conecta-go-${go_version}-$(uname -m)"
+    mkdir -p "$GO_TOOLCHAIN_DIR"
+    tar -C "$GO_TOOLCHAIN_DIR" --strip-components=1 -xzf /tmp/go.tar.gz
     rm -f /tmp/go.tar.gz
-    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
-    chmod +x /etc/profile.d/go.sh
+    export PATH="$GO_TOOLCHAIN_DIR/bin:$PATH"
   fi
 
-  export PATH=$PATH:/usr/local/go/bin
+  if [[ -x "${GO_TOOLCHAIN_DIR:-}/bin/go" ]]; then export PATH="${GO_TOOLCHAIN_DIR}/bin:$PATH"; elif [[ -x /usr/local/go/bin/go ]]; then export PATH="/usr/local/go/bin:$PATH"; fi
   go version
 }
 
@@ -397,8 +353,9 @@ update_online_web_pro_module() {
   local was_enabled=false
 
   [[ -f "$source_dir/main.go" && -f "$source_dir/conecta-online-bridge.service" ]] || return 0
-
-  [[ -f /etc/systemd/system/conecta-online-bridge.service ]] && had_unit=true
+  grep -qx 'OWNED_UNIT_ONLINE_BRIDGE=1' "$INSTALL_DIR/.conecta-install-manifest" || { info "Bridge ownership not declared; update leaves it untouched."; return 0; }
+  [[ -f /etc/systemd/system/conecta-online-bridge.service ]] || { info "Bridge unit absent; update will not create it."; return 0; }
+  had_unit=true
   "$SYSTEMCTL_BIN" is-enabled --quiet conecta-online-bridge.service 2>/dev/null && was_enabled=true
 
   mkdir -p "$module_dir"
@@ -408,11 +365,7 @@ update_online_web_pro_module() {
   install -m 0644 "$source_dir/conecta-online-bridge.service" /etc/systemd/system/conecta-online-bridge.service
   "$SYSTEMCTL_BIN" daemon-reload
 
-  if $was_enabled || ! $had_unit; then
-    "$SYSTEMCTL_BIN" enable --now conecta-online-bridge.service
-  else
-    "$SYSTEMCTL_BIN" disable --now conecta-online-bridge.service >/dev/null 2>&1 || true
-  fi
+  if $was_enabled; then "$SYSTEMCTL_BIN" enable conecta-online-bridge.service; else "$SYSTEMCTL_BIN" disable conecta-online-bridge.service >/dev/null 2>&1 || true; fi
   info "  MODULO ONLINE WEB PRO updated (existing activation state preserved)."
 }
 
@@ -423,7 +376,6 @@ apply_update() {
   info "[5/7] Applying update..."
 
   mkdir -p "$INSTALL_DIR/logs" "$INSTALL_DIR/certs"
-  ensure_log_tmpfs_mount
 
   if [[ -f "$INSTALL_DIR/sshpanel" ]]; then
     ROLLBACK_BINARY="$INSTALL_DIR/sshpanel.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
@@ -453,26 +405,9 @@ apply_update() {
 
   install -m 700 "$SOURCE_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
-  if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
-    CONECTA_BACKUP="/usr/local/bin/conecta.backup.$(date +%s%N)"
-    mv /usr/local/bin/conecta "$CONECTA_BACKUP"
-    warn "  Previous conecta command saved to $CONECTA_BACKUP"
-  fi
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
-  disable_legacy_login_hook
 
-  # Compatibility repair for releases that previously hijacked the generic menu command.
-  if [[ -L /usr/local/bin/menu ]] && [[ "$(readlink -f /usr/local/bin/menu 2>/dev/null || true)" == "$INSTALL_DIR/conectassh_cli.py" ]]; then
-    mkdir -p "$INSTALL_DIR/compat-backups"
-    mv /usr/local/bin/menu "$INSTALL_DIR/compat-backups/menu-conectassh-disabled.$(date +%s%N)"
-    MENU_BACKUP="$(find /usr/local/bin -maxdepth 1 \( -name "menu.backup.*" -type f -o -name "menu.backup.*" -type l \) 2>/dev/null | sort | tail -n 1)"
-    if [[ -n "$MENU_BACKUP" ]]; then
-      mv "$MENU_BACKUP" /usr/local/bin/menu
-      warn "  Restored the previous menu command."
-    else
-      warn "  Removed the ConectaSSH-PRO menu override; no legacy menu backup was found."
-    fi
-  fi
+  # The generic /usr/local/bin/menu command is outside this product's ownership; preserve it.
 
   # CRITICAL SSH SAFETY: updates must never create or re-enable login hooks.
   # Existing disabled hooks remain disabled. CLI stays manual (`conecta`).
@@ -485,7 +420,7 @@ apply_update() {
   # Keep a local copy of the latest source for easier support and future updates.
   if [[ "$SOURCE_DIR" != "$SOURCE_CACHE_DIR" ]]; then
     mkdir -p "$SOURCE_CACHE_DIR"
-    rsync -a --delete --exclude '.git' "$SOURCE_DIR/" "$SOURCE_CACHE_DIR/"
+    rsync -a --exclude '.git' "$SOURCE_DIR/" "$SOURCE_CACHE_DIR/"
     info "  Source files copied to $SOURCE_CACHE_DIR"
   fi
 
@@ -590,111 +525,10 @@ PYEOF
   fi
 }
 
-dnstt_redirect_is_enabled() {
-  # Updates must not resurrect this service when an admin intentionally
-  # disabled/removed it because it can break ip6tables on some machines.
-  local unit="sshpanel-dnstt-redirect.service"
-
-  if "$SYSTEMCTL_BIN" is-enabled --quiet "$unit" 2>/dev/null; then
-    return 0
-  fi
-
-  return 1
-}
-
-write_sshpanel_systemd_override() {
-  local include_dnstt_redirect="${1:-false}"
-
-  mkdir -p /etc/systemd/system/sshpanel.service.d
-  {
-    echo "[Unit]"
-    if [[ "$include_dnstt_redirect" == "true" ]]; then
-      echo "Wants=sshpanel-dnstt-redirect.service"
-      echo "After=local-fs.target sshpanel-dnstt-redirect.service"
-    else
-      echo "After=local-fs.target"
-    fi
-    echo
-    echo "[Service]"
-    echo "Environment=PANEL_LOG_FILE=${INSTALL_DIR}/logs/panel.log"
-    echo "Environment=PANEL_LOG_MAX_BYTES=${PANEL_LOG_MAX_BYTES}"
-    echo "LimitNOFILE=1048576"
-    echo "ExecStartPre="
-    echo "ExecStartPre=${MKDIR_BIN} -p ${INSTALL_DIR}/logs"
-    echo "ExecStartPre=${SH_BIN} -c '${MOUNTPOINT_BIN} -q ${INSTALL_DIR}/logs || ${MOUNT_BIN} -t tmpfs -o size=${LOG_TMPFS_SIZE},mode=0755 tmpfs ${INSTALL_DIR}/logs || true'"
-    echo "ExecStartPre=${SH_BIN} -c '${TOUCH_BIN} ${INSTALL_DIR}/logs/panel.log && ${CHMOD_BIN} 0644 ${INSTALL_DIR}/logs/panel.log || true'"
-    echo "StandardOutput=journal"
-    echo "StandardError=journal"
-  } > /etc/systemd/system/sshpanel.service.d/override.conf
-}
-
-ensure_dnstt_redirect() {
-  if ! dnstt_redirect_is_enabled; then
-    warn "  sshpanel-dnstt-redirect is disabled or removed; update will not recreate or enable it."
-    write_sshpanel_systemd_override false
-    "$SYSTEMCTL_BIN" daemon-reload
-    return 0
-  fi
-
-  info "  Ensuring DNSTT DNS redirect service exists..."
-  cat > /usr/local/sbin/sshpanel-dnstt-redirect.sh <<'EOS'
-#!/bin/bash
-set -euo pipefail
-DNS_UPSTREAM="${DNS_UPSTREAM:-1.1.1.1}"
-DNSTT_PORT="${DNSTT_PORT:-5300}"
-
-# Do not disable systemd-resolved or overwrite /etc/resolv.conf here.
-# Resolver configuration belongs to the OS/operator; touching it can sever
-# DNS-dependent management paths during an update.
-
-# Firewall policy is operator-managed. Never open ports or reload firewalld
-# implicitly during a panel update; configure UDP/53 explicitly if DNSTT is used.
-
-add_iptables_rule() {
-  local bin="$1" chain="$2"
-  "$bin" -t nat -C "$chain" -p udp --dport 53 -j REDIRECT --to-ports "$DNSTT_PORT" 2>/dev/null \
-    || "$bin" -t nat -A "$chain" -p udp --dport 53 -j REDIRECT --to-ports "$DNSTT_PORT"
-}
-
-if command -v iptables >/dev/null 2>&1; then
-  add_iptables_rule iptables PREROUTING
-fi
-if command -v ip6tables >/dev/null 2>&1; then
-  add_iptables_rule ip6tables PREROUTING || true
-fi
-if ! command -v iptables >/dev/null 2>&1 && command -v nft >/dev/null 2>&1; then
-  nft add table inet sshpanel_nat 2>/dev/null || true
-  nft 'add chain inet sshpanel_nat prerouting { type nat hook prerouting priority dstnat; policy accept; }' 2>/dev/null || true
-  nft list chain inet sshpanel_nat prerouting 2>/dev/null | grep -q "udp dport 53 redirect to :$DNSTT_PORT" \
-    || nft add rule inet sshpanel_nat prerouting udp dport 53 redirect to :"$DNSTT_PORT"
-fi
-EOS
-  chmod +x /usr/local/sbin/sshpanel-dnstt-redirect.sh
-
-  cat > /etc/systemd/system/sshpanel-dnstt-redirect.service <<'EOF2'
-[Unit]
-Description=SSH Panel DNSTT DNS redirect (UDP 53 to 5300)
-After=network.target
-Before=sshpanel.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/sshpanel-dnstt-redirect.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF2
-
-  write_sshpanel_systemd_override true
-
-  "$SYSTEMCTL_BIN" daemon-reload
-  "$SYSTEMCTL_BIN" enable --now sshpanel-dnstt-redirect.service || warn "DNSTT redirect service failed. Check: journalctl -u sshpanel-dnstt-redirect -e"
-}
+# Standard update never changes DNSTT, DNS, firewall, NAT rules or auxiliary redirect units.
 
 restart_service() {
   info "[7/7] Restarting service..."
-  ensure_dnstt_redirect
 
   if $RESTART_NEEDED; then
     info "  Starting $SERVICE_NAME after update..."
@@ -723,11 +557,21 @@ restart_service() {
 # Pre-flight
 info "[0/7] Pre-flight checks..."
 require_systemd
+[[ -d "$INSTALL_DIR" ]] || error "Install dir $INSTALL_DIR not found. Run install.sh first."
+[[ -f "$INSTALL_DIR/.conecta-install-manifest" ]] || error "Ownership manifest missing; refusing to update an unverified directory."
+grep -qx 'PRODUCT=ConectaSSH-PRO' "$INSTALL_DIR/.conecta-install-manifest" || error "Ownership manifest not recognized; refusing update."
+if grep -q '^STATE=' "$INSTALL_DIR/.conecta-install-manifest"; then
+  grep -qx 'STATE=installed' "$INSTALL_DIR/.conecta-install-manifest" || error "Installation state is not committed; recover/reinstall before updating."
+fi
+[[ -f "$INSTALL_DIR/sshpanel" && -f "$INSTALL_DIR/.env" ]] || error "Installation incomplete; refusing in-place update without binary and .env."
+for cli_path in /usr/local/bin/conecta /usr/local/bin/conectassh; do
+  if [[ -e "$cli_path" || -L "$cli_path" ]]; then
+    [[ -L "$cli_path" && "$(readlink -f "$cli_path" 2>/dev/null || true)" == "$INSTALL_DIR/conectassh_cli.py" ]] || error "CLI ajeno detectado en $cli_path; se conserva y no se actualiza."
+  fi
+done
 detect_pkg_manager
 set_update_deps
 ensure_update_dependencies
-[[ -d "$INSTALL_DIR" ]] || error "Install dir $INSTALL_DIR not found. Run install.sh first."
-[[ -f "$INSTALL_DIR/.env" ]] || error "$INSTALL_DIR/.env not found. Run install.sh first."
 need_cmd python3
 need_cmd rsync
 need_cmd wget
