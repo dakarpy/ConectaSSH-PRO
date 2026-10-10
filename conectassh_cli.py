@@ -1212,6 +1212,26 @@ def tls_listener_menu():
     menu("ESCUCHAS TLS", options, force_single=True)
 
 
+def public_ssh_http_display(config):
+    """Compact public SSH/HTTP summary that fits narrow mobile terminals."""
+    main = str(config.get("listen") or "--").strip()
+    main_enabled = main.lower() not in ("disabled", "off", "--", "none", "")
+    extras = []
+    for endpoint in (config.get("extra_listen") or []):
+        value = str(endpoint).strip()
+        if value.lower() in ("disabled", "off", "--", "none", ""):
+            continue
+        extras.append(compact_public_endpoint(value))
+    state = "ON" if main_enabled else "OFF"
+    suffix = " " + ",".join(extras) if extras else ""
+    return state + suffix, main_enabled
+
+
+def compact_public_endpoint(value):
+    import re
+    return re.sub(r"0\.0\.0\.0:(\d+)", r":\1", str(value))
+
+
 def _endpoint_port(value):
     text = str(value or "").strip()
     if text.lower() in ("disabled", "off", "-"):
@@ -1383,7 +1403,7 @@ def server_settings_menu():
         tls = cfg.get("tls_forwarders") or []
         blocks = [
             ("OPENSSH", listen, True),
-            ("SSH/HTTP PÚBLICO", ", ".join([listen, *extra]), True),
+            ("SSH/HTTP", *public_ssh_http_display(cfg)),
             ("TLS SSH", ", ".join(x.get("listen", "--") for x in tls) or "--", bool(tls)),
             ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
             ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
@@ -1398,9 +1418,16 @@ def server_settings_menu():
                 name, value, enabled = item
                 marker = "◉" if enabled else "○"
                 marker_color = GREEN if enabled else RED
-                return (paint("[", CYAN) + paint(marker, marker_color, True) +
-                        paint("] ", CYAN) + paint(name, WHITE) +
-                        paint(": " + compact_endpoint(value), WHITE))
+                prefix = (paint("[", CYAN) + paint(marker, marker_color, True) +
+                          paint("] ", CYAN) + paint(name, WHITE) + paint(": "))
+                value_text = compact_endpoint(value)
+                if name == "SSH/HTTP":
+                    parts = value_text.split(" ", 1)
+                    state_text = parts[0] if parts else "WARN"
+                    suffix = (" " + parts[1]) if len(parts) > 1 else ""
+                    state_color = GREEN if state_text == "ON" else RED if state_text == "OFF" else YELLOW
+                    return prefix + paint(state_text, state_color, True) + paint(suffix, WHITE)
+                return prefix + paint(value_text, WHITE)
 
             left_plain = f"[{'◉' if blocks[i][2] else '○'}] {blocks[i][0]}: {compact_endpoint(blocks[i][1])}"
             left_colored = paint_protocol(blocks[i])
@@ -1955,7 +1982,7 @@ def connection_protocols_visual(show_return=True):
     tls = cfg.get("tls_forwarders") or []
     blocks = [
         ("OPENSSH", listen, True),
-        ("SSH/HTTP PÚBLICO", ", ".join([listen, *extra]), True),
+        ("SSH/HTTP", *public_ssh_http_display(cfg)),
         ("TLS SSH", ", ".join(x.get("listen", "--") for x in tls) or "--", bool(tls)),
         ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
         ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
@@ -2002,6 +2029,12 @@ def connection_protocols_visual(show_return=True):
             name_part = paint("[", CYAN) + paint(marker, marker_color, True) + paint("] ", CYAN)
             name_part += paint(name, WHITE)
             value_text = compact_endpoint(value)
+            if name == "SSH/HTTP":
+                parts = value_text.split(" ", 1)
+                state_text = parts[0] if parts else "WARN"
+                suffix = (" " + parts[1]) if len(parts) > 1 else ""
+                state_color = GREEN if state_text == "ON" else RED if state_text == "OFF" else YELLOW
+                return name_part + paint(": ") + paint(state_text, state_color, True) + paint(suffix, WHITE)
             return name_part + paint(": " + value_text, WHITE)
 
         left_colored = paint_protocol(blocks[i])

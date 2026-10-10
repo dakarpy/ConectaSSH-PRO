@@ -17,6 +17,25 @@ cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 
 
+class PublicSSHHTTPDisplayTest(unittest.TestCase):
+    def test_compact_display_preserves_status_and_extra_ports(self):
+        self.assertEqual(cli.public_ssh_http_display({
+            "listen": "disabled", "extra_listen": ["0.0.0.0:8080"]
+        }), ("OFF :8080", False))
+        self.assertEqual(cli.public_ssh_http_display({
+            "listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]
+        }), ("ON :8080", True))
+
+    def test_compact_display_omits_disabled_endpoints_and_fits_mobile(self):
+        config = {"listen": "disabled", "extra_listen": ["disabled", "0.0.0.0:8080"]}
+        value, enabled = cli.public_ssh_http_display(config)
+        self.assertEqual(value, "OFF :8080")
+        self.assertFalse(enabled)
+        with patch.object(cli, "request", return_value=config):
+            rendered = cli.render_menu("MAIN MENU", cli.main_menu_options(), columns=40)
+        self.assertLessEqual(max(map(len, rendered.splitlines())), 40)
+
+
 class WebsocketPort80MenuTest(unittest.TestCase):
     def test_activate_port80_preserves_other_extra_listeners(self):
         config = {"listen": "0.0.0.0:443", "extra_listen": ["0.0.0.0:8080", "0.0.0.0:80"]}
