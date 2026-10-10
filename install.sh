@@ -8,6 +8,27 @@ info()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 error() { echo -e "${RED}[x]${NC} $*"; exit 1; }
 
+
+# Disable a legacy Conecta login hook from older installations without overwriting backups.
+disable_legacy_login_hook() {
+  local hook="/etc/profile.d/conecta-auto-menu.sh"
+  local backup_dir="$INSTALL_DIR/compat-backups"
+  local backup
+  if [[ ! -e "$hook" && ! -L "$hook" ]]; then
+    return 0
+  fi
+  if ! grep -qE 'conecta|sshpanel|auto_menu' "$hook" 2>/dev/null; then
+    warn "Found $hook but its contents are not recognized; leaving it untouched."
+    return 0
+  fi
+  mkdir -p "$backup_dir"
+  chmod 0700 "$backup_dir"
+  backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
+  mv -- "$hook" "$backup"
+  chmod 0600 "$backup" 2>/dev/null || true
+  info "Disabled legacy SSH login hook; preserved at $backup"
+}
+
 # ── config ──────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/sshpanel"
 SERVICE_NAME="sshpanel"
@@ -424,6 +445,7 @@ if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink 
   warn "  Previous conecta command saved to $CONECTA_BACKUP"
 fi
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
+disable_legacy_login_hook
 # CRITICAL SSH SAFETY: never install a login-shell hook automatically.
 # The CLI is launched explicitly with `conecta`; login must stay independent.
 # Never modify /etc/profile.d, sshd, the SSH port, or existing sessions here.

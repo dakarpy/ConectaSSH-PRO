@@ -13,6 +13,8 @@ class SSHLoginSafetyTests(unittest.TestCase):
                 self.assertNotIn('install -m 0644 "$SOURCE_DIR/auto-menu.sh" /etc/profile.d/', source)
                 self.assertNotIn('systemctl restart ssh', source)
                 self.assertNotIn('systemctl restart sshd', source)
+                self.assertIn("disable_legacy_login_hook()", source)
+                self.assertIn("disable_legacy_login_hook", source)
 
 if __name__ == "__main__":
     unittest.main()

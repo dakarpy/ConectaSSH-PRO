@@ -336,6 +336,28 @@ update_online_web_pro_module() {
 }
 
 
+
+# Disable legacy login hook left by older releases. Never overwrite a backup.
+disable_legacy_login_hook() {
+  local hook="/etc/profile.d/conecta-auto-menu.sh"
+  local backup_dir="$INSTALL_DIR/compat-backups"
+  local backup
+  if [[ ! -e "$hook" && ! -L "$hook" ]]; then
+    return 0
+  fi
+  # Only move our known Conecta hook; do not touch unrelated profile scripts.
+  if ! grep -qE 'conecta|sshpanel|auto_menu' "$hook" 2>/dev/null; then
+    warn "  Found $hook but its contents are not recognized; leaving it untouched."
+    return 0
+  fi
+  mkdir -p "$backup_dir"
+  chmod 0700 "$backup_dir"
+  backup="$backup_dir/conecta-auto-menu.sh.disabled.$(date +%s%N)"
+  mv -- "$hook" "$backup"
+  chmod 0600 "$backup" 2>/dev/null || true
+  info "  Disabled legacy SSH login hook; preserved at $backup"
+}
+
 apply_update() {
   info "[5/7] Applying update..."
 
@@ -367,6 +389,7 @@ apply_update() {
     warn "  Previous conecta command saved to $CONECTA_BACKUP"
   fi
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
+  disable_legacy_login_hook
 
   # Compatibility repair for releases that previously hijacked the generic menu command.
   if [[ -L /usr/local/bin/menu ]] && [[ "$(readlink -f /usr/local/bin/menu 2>/dev/null || true)" == "$INSTALL_DIR/conectassh_cli.py" ]]; then
