@@ -3,6 +3,8 @@
 # Disabled by default; controlled by auto_menu in /opt/sshpanel/config.json.
 case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
 [ "$(id -u 2>/dev/null)" = "0" ] || return 0 2>/dev/null || exit 0
+[ -n "${SSH_CONNECTION:-}" ] || return 0 2>/dev/null || exit 0
+[ -t 0 ] && [ -t 1 ] || return 0 2>/dev/null || exit 0
 [ "${CONECTA_AUTO_MENU_RUNNING:-0}" = "1" ] && return 0 2>/dev/null || exit 0
 CONFIG=/opt/sshpanel/config.json
 [ -r "$CONFIG" ] || return 0 2>/dev/null || exit 0

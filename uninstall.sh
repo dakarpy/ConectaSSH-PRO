@@ -32,17 +32,17 @@ done
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl reset-failed "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE" >/dev/null 2>&1 || true
 
-remove_redirect_rule(){
-  local bin="$1"
-  command -v "$bin" >/dev/null 2>&1 || return 0
-  while "$bin" -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; do
-    "$bin" -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 >/dev/null 2>&1 || break
-  done
-}
-remove_redirect_rule iptables
-remove_redirect_rule ip6tables
+# Do not delete generic PREROUTING redirects: without a persisted ownership
+# record, an identical rule may belong to another service. Never delete a
+# shared nftables table; preserve ambiguous rules and report them for review.
+if command -v iptables >/dev/null 2>&1 && iptables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; then
+  info "Se conserva la regla iptables UDP/53 -> 5300: no existe prueba de propiedad exclusiva."
+fi
+if command -v ip6tables >/dev/null 2>&1 && ip6tables -t nat -C PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 5300 2>/dev/null; then
+  info "Se conserva la regla ip6tables UDP/53 -> 5300: no existe prueba de propiedad exclusiva."
+fi
 if command -v nft >/dev/null 2>&1 && nft list table inet sshpanel_nat >/dev/null 2>&1; then
-  nft delete table inet sshpanel_nat >/dev/null 2>&1 || true
+  info "Se conserva inet sshpanel_nat: no se elimina una tabla nftables completa automáticamente."
 fi
 
 if [[ "$UFW_53_ADDED" == "1" ]] && command -v ufw >/dev/null 2>&1; then ufw delete allow 53/udp >/dev/null 2>&1 || true; fi
@@ -72,7 +72,7 @@ for link in /usr/local/bin/conecta /usr/local/bin/conectassh; do
   if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null || true)" == "$CLI" ]]; then rm -f "$link"; fi
 done
 if [[ -n "$CONECTA_BACKUP" && -e "$CONECTA_BACKUP" ]]; then mv "$CONECTA_BACKUP" /usr/local/bin/conecta; fi
-if [[ -f /etc/profile.d/conecta-auto-menu.sh ]] && grep -q '/usr/local/bin/conecta' /etc/profile.d/conecta-auto-menu.sh 2>/dev/null; then
+if [[ -f /etc/profile.d/conecta-auto-menu.sh ]] && { grep -Fq '# Managed by ConectaSSH-PRO AUTO MENU; do not edit.' /etc/profile.d/conecta-auto-menu.sh 2>/dev/null || grep -q '/usr/local/bin/conecta' /etc/profile.d/conecta-auto-menu.sh 2>/dev/null; }; then
   rm -f /etc/profile.d/conecta-auto-menu.sh
 fi
 

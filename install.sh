@@ -487,6 +487,7 @@ chmod 0600 "$INSTALL_DIR/.installed_repo_url"
 info "  Binary: $INSTALL_DIR/sshpanel"
 info "  Build commit: $BUILD_COMMIT ($BUILD_BRANCH)"
 install -m 700 "$SCRIPT_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
+install -m 0644 "$SCRIPT_DIR/auto-menu.sh" "$INSTALL_DIR/auto-menu.sh"
 install -m 700 "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
 ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
 if [[ ( -e /usr/local/bin/conecta || -L /usr/local/bin/conecta ) && "$(readlink -f /usr/local/bin/conecta 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then
@@ -788,6 +789,7 @@ cat > "$INSTALL_DIR/config.json" <<EOF
   "host_key_file": "${INSTALL_DIR}/ssh_host_rsa_key",
   "quiet": false,
   "pam_auth_enabled": true,
+  "auto_menu": false,
   "banner_file": "${INSTALL_DIR}/banner.txt",
   "xray": {
     "enabled": false,

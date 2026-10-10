@@ -1184,6 +1184,7 @@ def tls_listener_status(entry):
 
 
 def tls_listener_save(cfg, listeners):
+    """Save TLS listeners only through the dedicated TLS API."""
     cfg["tls_forwarders"] = listeners
     return request("POST", "/api/tls/listeners", {"tls_forwarders": listeners})
 
@@ -1255,7 +1256,12 @@ def tls_listener_menu():
     def options():
         cfg = request("GET", "/api/server/config") or {}
         listeners = cfg.get("tls_forwarders") or []
-        cert_info = request("GET", "/api/tls/listeners") or {}
+        # Older recovery binaries do not expose /api/tls/listeners. Do not let
+        # that optional metadata endpoint prevent users from entering TLS TUNNEL.
+        try:
+            cert_info = request("GET", "/api/tls/listeners") or {}
+        except (CLIError, OSError, ValueError, json.JSONDecodeError):
+            cert_info = {}
         domain = cert_info.get("domain") or "sin certificado"
         result = {
             "1": ("GENERAR CERTIFICADO", tls_certificate_menu),
@@ -1283,19 +1289,37 @@ def tls_listener_show_status(cfg=None, domain=None):
     print("Nota: ON/WARN verifica el socket TCP, no un handshake TLS/SSH completo.")
 
 
-def public_ssh_http_display(config):
-    """Compact public SSH/HTTP summary that fits narrow mobile terminals."""
-    main = str(config.get("listen") or "--").strip()
-    main_enabled = main.lower() not in ("disabled", "off", "--", "none", "")
-    extras = []
-    for endpoint in (config.get("extra_listen") or []):
-        value = str(endpoint).strip()
-        if value.lower() in ("disabled", "off", "--", "none", ""):
+def websocket_public_ports_display(config):
+    """Show only public WebSocket ports configured AND listening in the kernel."""
+    import ipaddress
+    endpoints = [config.get("listen"), *(config.get("extra_listen") or [])]
+    configured_public_ports = set()
+    for endpoint in endpoints:
+        value = str(endpoint or "").strip()
+        if not value or value.lower() in ("disabled", "off", "--", "none"):
             continue
-        extras.append(compact_public_endpoint(value))
-    state = "ON" if main_enabled else "OFF"
-    suffix = " " + ",".join(extras) if extras else ""
-    return state + suffix, main_enabled
+        try:
+            host, port_text = value.rsplit(":", 1)
+            port = int(port_text)
+        except (ValueError, TypeError):
+            continue
+        host = host.strip("[]")
+        if port not in (80, 8080):
+            continue
+        try:
+            is_public = not ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            is_public = host in ("*", "") or host == "0.0.0.0"
+        if is_public:
+            configured_public_ports.add(port)
+    active_ports = [port for port in (80, 8080)
+                    if port in configured_public_ports and websocket_port_is_listening(port)]
+    return (", ".join(map(str, active_ports)) if active_ports else "--", bool(active_ports))
+
+
+def public_ssh_http_display(config):
+    """Backward-compatible alias for the public WebSocket port summary."""
+    return websocket_public_ports_display(config)
 
 
 def compact_public_endpoint(value):
@@ -1336,29 +1360,80 @@ def websocket_port80_activate():
 
 
 def websocket_port80_deactivate():
+    """Disable both public WebSocket ports (80 and 8080), preserving protected SSH ports."""
     document = request("GET", "/api/server/config") or {}
     main_is_80, extra_is_80 = websocket_port80_status(document)
-    if not main_is_80 and not extra_is_80:
-        print("El puerto 80 ya está desactivado en la configuración de ConectaSSH-PRO.")
+    extra_ports = {_endpoint_port(item) for item in (document.get("extra_listen") or [])}
+    needs_change = main_is_80 or extra_is_80 or 8080 in extra_ports
+    if not needs_change:
+        # Still verify the kernel sockets; a stale listener must not be reported as OFF.
+        open_ports = [port for port in (80, 8080) if websocket_port_is_listening(port) is True]
+        if open_ports:
+            print("ADVERTENCIA: listener(s) TCP todavía abiertos: " + ", ".join(map(str, open_ports)))
+            print("La configuración no los administra actualmente; no se detuvo ningún proceso externo.")
+        else:
+            print("Los puertos WebSocket 80 y 8080 ya están desactivados.")
         return
     if main_is_80:
-        document["listen"] = "disabled"
-    # Remove port 80 from additional listeners too, preserving all other ports.
-    document["extra_listen"] = [item for item in (document.get("extra_listen") or [])
-                                if _endpoint_port(item) != 80]
+        # Recovery binary does not support listen='disabled'; this loopback endpoint
+        # prevents its fallback from reopening public port 80.
+        document["listen"] = "127.0.0.1:18080"
+    # Remove both WebSocket ports from additional listeners, keeping every other port.
+    document["extra_listen"] = [
+        item for item in (document.get("extra_listen") or [])
+        if _endpoint_port(item) not in (80, 8080)
+    ]
     save_settings("/api/server/config", document)
-    print("Solicitud de desactivación del puerto 80 enviada a ConectaSSH-PRO.")
-    print("Los demás puertos configurados se conservan.")
+    saved = request("GET", "/api/server/config") or {}
+    saved_main, saved_extra = websocket_port80_status(saved)
+    saved_extra_ports = {_endpoint_port(item) for item in (saved.get("extra_listen") or [])}
+    if saved_main or saved_extra or 8080 in saved_extra_ports:
+        raise CLIError("El servidor no guardó la desactivación de 80/8080; revisá la configuración.")
+    open_ports = [port for port in (80, 8080) if websocket_port_is_listening(port) is True]
+    if open_ports:
+        print("ADVERTENCIA: la configuración quitó 80/8080, pero siguen escuchando: " + ", ".join(map(str, open_ports)))
+        print("No se detuvieron procesos externos. Revisá con ss -ltnp.")
+        return
+    print("Puertos WebSocket 80 y 8080 desactivados y verificados.")
+    print("SSH 22 y 2222 no se modificaron. El listener principal local se conserva en 127.0.0.1:18080.")
 
 
-def websocket_port80_is_listening():
-    """Check the kernel TCP listen tables; this verifies the port, not a WebSocket handshake."""
+def websocket_port_is_listening(port=80):
+    """Check the kernel TCP listen tables for a port; this is not a WebSocket handshake."""
+    target = f"{int(port):04X}"
     try:
         for path in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
             lines = path.read_text(encoding="ascii").splitlines()[1:]
             for line in lines:
                 fields = line.split()
-                if len(fields) > 3 and fields[1].rsplit(":", 1)[-1].upper() == "0050" and fields[3] == "0A":
+                if len(fields) > 3 and fields[1].rsplit(":", 1)[-1].upper() == target and fields[3] == "0A":
+                    return True
+        return False
+    except OSError:
+        return None
+
+
+def websocket_port80_is_listening():
+    return websocket_port_is_listening(80)
+
+
+def transport_port_is_listening(port, protocol="tcp"):
+    """Inspect kernel socket tables for an actual TCP LISTEN or bound UDP socket."""
+    protocol = str(protocol).lower()
+    if protocol not in ("tcp", "udp"):
+        raise ValueError("protocol must be tcp or udp")
+    target = f"{int(port):04X}"
+    paths = (Path(f"/proc/net/{protocol}"), Path(f"/proc/net/{protocol}6"))
+    try:
+        for path in paths:
+            lines = path.read_text(encoding="ascii").splitlines()[1:]
+            for line in lines:
+                fields = line.split()
+                if len(fields) <= 3 or fields[1].rsplit(":", 1)[-1].upper() != target:
+                    continue
+                if protocol == "tcp" and fields[3] == "0A":
+                    return True
+                if protocol == "udp" and fields[3] in ("07", "0A"):
                     return True
         return False
     except OSError:
@@ -1469,13 +1544,12 @@ def server_settings_menu():
         print(paint("┃" + " MODOS DE CONEXIÓN ".center(inner) + "┃", CYAN, True))
         print(paint("┣" + "━" * width + "┫", CYAN))
 
-        listen = cfg.get("listen") or "--"
-        extra = cfg.get("extra_listen") or []
         tls = cfg.get("tls_forwarders") or []
+        websocket_ports = websocket_public_ports_display(cfg)
         blocks = [
-            ("OPENSSH", listen, True),
-            ("SSH/HTTP", *public_ssh_http_display(cfg)),
-            ("TLS SSH", ", ".join(x.get("listen", "--") for x in tls) or "--", bool(tls)),
+            ("WEBSOCKET", *websocket_ports),
+            ("PUERTOS PUBLICOS", *websocket_ports),
+            ("TLS TUNNEL", ", ".join(x.get("listen", "--") for x in tls) or "-", bool(tls)),
             ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
             ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
             ("BTUN", "TCP " + str((cfg.get("btun") or {}).get("tcp_listen", "--")) + " / UDP " + str((cfg.get("btun") or {}).get("udp_listen", "--")), cfg.get("btun") is not None),
@@ -1492,12 +1566,6 @@ def server_settings_menu():
                 prefix = (paint("[", CYAN) + paint(marker, marker_color, True) +
                           paint("] ", CYAN) + paint(name, WHITE) + paint(": ", WHITE))
                 value_text = compact_endpoint(value)
-                if name == "SSH/HTTP":
-                    parts = value_text.split(" ", 1)
-                    state_text = parts[0] if parts else "WARN"
-                    suffix = (" " + parts[1]) if len(parts) > 1 else ""
-                    state_color = GREEN if state_text == "ON" else RED if state_text == "OFF" else YELLOW
-                    return prefix + paint(state_text, state_color, True) + paint(suffix, WHITE)
                 return prefix + paint(value_text, WHITE)
 
             left_plain = f"[{'◉' if blocks[i][2] else '○'}] {blocks[i][0]}: {compact_endpoint(blocks[i][1])}"
@@ -2045,16 +2113,12 @@ def regenerate_dnstt_key():
 def connection_protocols_visual(show_return=True):
     cfg = request("GET", "/api/server/config") or {}
     def mark(enabled): return "◉" if enabled else "○"
-    listen = cfg.get("listen") or "--"
-    if str(listen).lower() in ("disabled", "off"):
-        listen = "DESACTIVADO"
-    extra = [addr for addr in (cfg.get("extra_listen") or [])
-             if str(addr).lower() not in ("disabled", "off")]
     tls = cfg.get("tls_forwarders") or []
+    websocket_ports = websocket_public_ports_display(cfg)
     blocks = [
-        ("OPENSSH", listen, True),
-        ("SSH/HTTP", *public_ssh_http_display(cfg)),
-        ("TLS SSH", ", ".join(x.get("listen", "--") for x in tls) or "--", bool(tls)),
+        ("WEBSOCKET", *websocket_ports),
+        ("PUERTOS PUBLICOS", *websocket_ports),
+        ("TLS TUNNEL", ", ".join(x.get("listen", "--") for x in tls) or "-", bool(tls)),
         ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
         ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
         ("BTUN", "TCP " + str((cfg.get("btun") or {}).get("tcp_listen", "--")) + " / UDP " + str((cfg.get("btun") or {}).get("udp_listen", "--")), cfg.get("btun") is not None),
@@ -2100,12 +2164,6 @@ def connection_protocols_visual(show_return=True):
             name_part = paint("[", CYAN) + paint(marker, marker_color, True) + paint("] ", CYAN)
             name_part += paint(name, WHITE)
             value_text = compact_endpoint(value)
-            if name == "SSH/HTTP":
-                parts = value_text.split(" ", 1)
-                state_text = parts[0] if parts else "WARN"
-                suffix = (" " + parts[1]) if len(parts) > 1 else ""
-                state_color = GREEN if state_text == "ON" else RED if state_text == "OFF" else YELLOW
-                return name_part + paint(": ", WHITE) + paint(state_text, state_color, True) + paint(suffix, WHITE)
             return name_part + paint(": " + value_text, WHITE)
 
         left_colored = paint_protocol(blocks[i])
@@ -2472,15 +2530,74 @@ def toggle_server_bool(key, label):
 
 
 
+AUTO_MENU_HOOK = Path("/etc/profile.d/conecta-auto-menu.sh")
+AUTO_MENU_MARKER = "# Managed by ConectaSSH-PRO AUTO MENU; do not edit."
+
+
+def sync_auto_menu_hook(enabled):
+    """Install/remove only our root-SSH login hook; never edit sshd or restart SSH."""
+    hook = AUTO_MENU_HOOK
+    if enabled:
+        lines = [
+            AUTO_MENU_MARKER,
+            "# Only launch the administrator CLI for an interactive root SSH login.",
+            'case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac',
+            '[ "$(id -u 2>/dev/null)" = "0" ] || return 0 2>/dev/null || exit 0',
+            '[ -n "${SSH_CONNECTION:-}" ] || return 0 2>/dev/null || exit 0',
+            '[ -t 0 ] && [ -t 1 ] || return 0 2>/dev/null || exit 0',
+            '[ "${CONECTA_AUTO_MENU_RUNNING:-0}" = "1" ] && return 0 2>/dev/null || exit 0',
+            '[ -r /opt/sshpanel/auto-menu.sh ] || return 0 2>/dev/null || exit 0',
+            '. /opt/sshpanel/auto-menu.sh',
+            '',
+        ]
+        content = "\n".join(lines)
+        try:
+            hook.parent.mkdir(parents=True, exist_ok=True)
+            if hook.exists() and AUTO_MENU_MARKER not in hook.read_text(errors="replace"):
+                raise CLIError(f"No se modifica {hook}: existe un archivo ajeno a ConectaSSH-PRO.")
+            fd, temp_name = tempfile.mkstemp(prefix=".conecta-auto-menu.", dir=str(hook.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.chmod(temp_name, 0o644)
+                os.replace(temp_name, hook)
+            finally:
+                try:
+                    os.unlink(temp_name)
+                except FileNotFoundError:
+                    pass
+        except OSError as exc:
+            raise CLIError(f"No se pudo activar AUTO MENU: {exc}") from exc
+    else:
+        try:
+            if hook.exists():
+                if AUTO_MENU_MARKER not in hook.read_text(errors="replace"):
+                    raise CLIError(f"No se elimina {hook}: existe un archivo ajeno a ConectaSSH-PRO.")
+                hook.unlink()
+        except OSError as exc:
+            raise CLIError(f"No se pudo desactivar AUTO MENU: {exc}") from exc
+
+
 def auto_menu_toggle():
     document = request("GET", "/api/server/config") or {}
     current = bool(document.get("auto_menu", False))
-    document["auto_menu"] = not current
+    target = not current
+    document["auto_menu"] = target
     save_settings("/api/server/config", document)
-    state = "ACTIVADO" if not current else "DESACTIVADO"
+    try:
+        sync_auto_menu_hook(target)
+    except CLIError:
+        document["auto_menu"] = current
+        try:
+            save_settings("/api/server/config", document)
+        except CLIError:
+            pass
+        raise
+    state = "ACTIVADO" if target else "DESACTIVADO"
     print(f"AUTO MENU: {state}.")
-    if not current:
-        print("ConectaSSH-PRO se abrirá automáticamente al iniciar una sesión SSH interactiva como root.")
+    if target:
+        print("Se abrirá al iniciar una sesión SSH interactiva como root. No afecta a usuarios SSH clientes ni modifica el puerto 22.")
+        print("Cerrá y volvé a abrir la sesión SSH para probarlo.")
     else:
         print("El inicio de sesión SSH volverá a la consola normal.")
 
@@ -2931,14 +3048,14 @@ def checkuser_dual_menu():
 
 
 def auto_configure():
-    """Back up current settings, enable standard non-TLS transports, and verify health."""
+    """Configure only non-TLS protocols whose required transport ports already listen."""
     require_root()
     print("\n╔══════════════════════════════════════════════╗")
     print("║             AUTO CONFIGURAR                 ║")
     print("╚══════════════════════════════════════════════╝")
-    print("Se guardará una copia antes de aplicar cambios.")
+    print("Solo se configurarán protocolos cuyos puertos ya estén escuchando.")
     print("Esta opción NO configura ni modifica TLS Tunnel/443.")
-    print("SSH administrativo del sistema (puerto 22) y usuarios no se modifican.\n")
+    print("SSH administrativo (22), SSH interno (2222) y usuarios no se modifican.\n")
 
     try:
         original = request("GET", "/api/server/config") or {}
@@ -2946,6 +3063,33 @@ def auto_configure():
         print(f"[✗] No se pudo leer la configuración actual: {exc}")
         print("No se realizaron cambios.")
         return
+
+    # Snapshot actual de sockets antes de tocar configuración. TCP 7300 no
+    # cuenta como UDPGW: ese protocolo necesita un socket UDP real.
+    socket_checks = {
+        "ws80": (80, "tcp"), "ws8080": (8080, "tcp"),
+        "hcr": (8880, "tcp"), "udpgw": (7300, "udp"),
+        "xray": (10086, "tcp"),
+    }
+    socket_state = {name: transport_port_is_listening(port, proto)
+                    for name, (port, proto) in socket_checks.items()}
+    if any(value is None for value in socket_state.values()):
+        print("[✗] No se pudieron inspeccionar todos los sockets del sistema.")
+        print("No se realizaron cambios para evitar abrir puertos por suposición.")
+        return
+
+    active = {name: value is True for name, value in socket_state.items()}
+    plan = []
+    if active["ws80"] or active["ws8080"]:
+        plan.append("WebSocket")
+    if active["ws8080"]:
+        plan.append("BHTTP (compartido en 8080)")
+    if active["hcr"]:
+        plan.append("HCR")
+    if active["udpgw"]:
+        plan.append("UDPGW")
+    if active["xray"]:
+        plan.append("Xray nativo")
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_dir = INSTALL_DIR / "backups" / f"auto-configure-{stamp}"
@@ -2961,90 +3105,115 @@ def auto_configure():
         print("No se realizaron cambios.")
         return
     print(f"[✓] Backup: {backup_file}")
+    print("Puertos detectados:")
+    for name, (port, proto) in socket_checks.items():
+        label = {"ws80": "WebSocket 80/TCP", "ws8080": "WebSocket/BHTTP 8080/TCP",
+                 "hcr": "HCR 8880/TCP", "udpgw": "UDPGW 7300/UDP",
+                 "xray": "Xray 10086/TCP"}[name]
+        state = "ABIERTO" if active[name] else "CERRADO"
+        print(f"  [{'✓' if active[name] else '○'}] {label}: {state}")
+
+    if not plan:
+        print("No hay puertos compatibles abiertos para auto-configurar.")
+        print("No se modificó la configuración.")
+        print(f"Backup conservado en: {backup_file}")
+        return
 
     updated = copy.deepcopy(original)
-    old_main = str(updated.get("listen") or "").strip()
-    old_port = _endpoint_port(old_main)
-    extras = list(updated.get("extra_listen") or [])
-    # Keep unrelated listeners (including an existing 443 listener); only
-    # reserve the ports explicitly managed by this non-TLS auto-configuration.
-    managed_ports = (80, 8080, 8880, 7300, 10086)
-    if old_main and old_port not in managed_ports and old_main.lower() not in ("disabled", "off"):
-        extras.append(old_main)
-    extras = [str(item) for item in extras if _endpoint_port(item) not in managed_ports]
-    extras.append("0.0.0.0:8080")
-    updated["extra_listen"] = list(dict.fromkeys(extras))
-    updated["listen"] = "0.0.0.0:80"
+    # Modificar solo los campos asociados a puertos que ya están escuchando.
+    if active["ws80"]:
+        updated["listen"] = "0.0.0.0:80"
+        updated["extra_listen"] = [str(item) for item in (updated.get("extra_listen") or [])
+                                   if _endpoint_port(item) != 80]
+    if active["ws8080"]:
+        extras = [str(item) for item in (updated.get("extra_listen") or [])]
+        if not any(_endpoint_port(item) == 8080 for item in extras) and _endpoint_port(updated.get("listen")) != 8080:
+            extras.append("0.0.0.0:8080")
+        updated["extra_listen"] = list(dict.fromkeys(extras))
+    if active["ws8080"]:
+        bhttp = copy.deepcopy(updated.get("bhttp") or {})
+        bhttp["shared_ports"] = True
+        updated["bhttp"] = bhttp
+    if active["hcr"]:
+        hcr = copy.deepcopy(updated.get("hcr") or {})
+        hcr["listen"] = ["0.0.0.0:8880"]
+        hcr["shared_ports"] = False
+        hcr.setdefault("engine", "official")
+        hcr.setdefault("transport", "plain")
+        hcr.setdefault("target", "127.0.0.1:2222")
+        updated["hcr"] = hcr
+    if active["udpgw"]:
+        udpgw = copy.deepcopy(updated.get("udpgw") or {})
+        udpgw["listen"] = "0.0.0.0:7300"
+        updated["udpgw"] = udpgw
+    if active["xray"]:
+        xray = copy.deepcopy(updated.get("xray") or {})
+        xray["enabled"] = True
+        xray["mode"] = "native"
+        xray["native"] = True
+        xray.setdefault("native_config_file", str(INSTALL_DIR / "xray_native_config.json"))
+        xray.setdefault("config_file", str(INSTALL_DIR / "xray_config.json"))
+        updated["xray"] = xray
 
-    bhttp = copy.deepcopy(updated.get("bhttp") or {})
-    bhttp["listen"] = []
-    bhttp["shared_ports"] = True
-    updated["bhttp"] = bhttp
-
-    hcr = copy.deepcopy(updated.get("hcr") or {})
-    hcr["listen"] = ["0.0.0.0:8880"]
-    hcr["shared_ports"] = False
-    hcr.setdefault("engine", "official")
-    hcr.setdefault("transport", "plain")
-    hcr.setdefault("target", "127.0.0.1:2222")
-    updated["hcr"] = hcr
-
-    udpgw = copy.deepcopy(updated.get("udpgw") or {})
-    udpgw["listen"] = "0.0.0.0:7300"
-    updated["udpgw"] = udpgw
-
-    xray = copy.deepcopy(updated.get("xray") or {})
-    xray["enabled"] = True
-    xray["mode"] = "native"
-    xray["native"] = True
-    xray.setdefault("native_config_file", str(INSTALL_DIR / "xray_native_config.json"))
-    xray.setdefault("config_file", str(INSTALL_DIR / "xray_config.json"))
-    updated["xray"] = xray
-
-    print("[1/3] Configurando WebSocket 80, BHTTP 8080, HCR 8880, UDPGW 7300 y Xray nativo (TLS excluido)...")
+    print("[1/3] Aplicando solo los protocolos con puerto abierto: " + ", ".join(plan))
     try:
         report = request("POST", "/api/server/config", updated, timeout=120) or {}
     except (CLIError, OSError, ValueError) as exc:
         print(f"[✗] No se pudo aplicar la configuración: {exc}")
-        print("Se intentará restaurar la configuración anterior.")
-        try:
-            request("POST", "/api/server/config", original, timeout=120)
-            print("[✓] Configuración original restaurada.")
-        except (CLIError, OSError, ValueError) as restore_exc:
-            print(f"[✗] No se pudo restaurar automáticamente: {restore_exc}")
-            print(f"Restauración manual: {backup_file}")
-        return
-
-    services = report.get("services") or {}
-    required = ("ssh", "bhttp", "hcr", "udpgw", "xray")
-    labels = {"ssh": "WebSocket SSH (80/8080)", "bhttp": "BHTTP (8080)",
-              "hcr": "HCR (8880)", "udpgw": "UDPGW (7300)", "xray": "Xray nativo"}
-    failures = []
-    print("[2/3] Verificando servicios en ejecución...")
-    for name in required:
-        state = services.get(name)
-        if isinstance(state, dict) and state.get("running") is True:
-            print(f"[✓] {labels[name]} · ACTIVO" + (f" · {state['listen']}" if state.get("listen") else ""))
-        else:
-            detail = state.get("error") if isinstance(state, dict) else "la API no confirmó el estado"
-            failures.append((name, detail or "servicio no activo"))
-            print(f"[✗] {labels[name]} · NO CONFIRMADO · {detail or 'servicio no activo'}")
-
-    if failures:
-        print("[3/3] Falló la verificación; restaurando la configuración anterior...")
-        try:
-            rollback = request("POST", "/api/server/config", original, timeout=120) or {}
-            print("[✓] Se solicitó la restauración de la configuración anterior.")
-            for warning in (rollback.get("warnings") or [])[:5]:
-                print_wrapped("Advertencia al restaurar: " + str(warning))
-        except (CLIError, OSError, ValueError) as exc:
-            print(f"[✗] No se pudo completar la restauración automática: {exc}")
-            print(f"Restauración manual: {backup_file}")
-        print("No se declara la configuración como exitosa. Revisá los errores anteriores.")
+        print("No se restaurará ni alterará SSH; revisá el backup si necesitás recuperar la configuración.")
         print(f"Backup conservado en: {backup_file}")
         return
 
-    print("[3/3] ¡Protocolos configurados y activos! TLS Tunnel quedó fuera de esta operación.")
+    services = report.get("services") or {}
+    checks = []
+    if active["ws80"] or active["ws8080"]:
+        checks.append(("ssh", "WebSocket SSH (puertos abiertos)"))
+    if active["ws8080"]:
+        checks.append(("bhttp", "BHTTP compartido (8080)"))
+    if active["hcr"]:
+        checks.append(("hcr", "HCR (8880/TCP)"))
+    if active["udpgw"]:
+        checks.append(("udpgw", "UDPGW (7300/UDP)"))
+    if active["xray"]:
+        checks.append(("xray", "Xray nativo (10086/TCP)"))
+
+    print("[2/3] Verificando servicios y sockets...")
+    failures = []
+    for name, label in checks:
+        state = services.get(name)
+        socket_ok = True
+        if name == "ssh":
+            expected = [port for port, key in ((80, "ws80"), (8080, "ws8080")) if active[key]]
+            socket_ok = all(transport_port_is_listening(port, "tcp") is True for port in expected)
+        elif name == "bhttp":
+            socket_ok = transport_port_is_listening(8080, "tcp") is True
+        elif name == "hcr":
+            socket_ok = transport_port_is_listening(8880, "tcp") is True
+        elif name == "udpgw":
+            socket_ok = transport_port_is_listening(7300, "udp") is True
+        elif name == "xray":
+            socket_ok = transport_port_is_listening(10086, "tcp") is True
+        if isinstance(state, dict) and state.get("running") is True and socket_ok:
+            print(f"[✓] {label} · ACTIVO · socket verificado")
+        else:
+            detail = state.get("error") if isinstance(state, dict) else "la API no confirmó el estado"
+            if not socket_ok:
+                detail = "el socket dejó de escuchar después de aplicar la configuración"
+            failures.append((name, detail or "servicio no activo"))
+            print(f"[✗] {label} · NO CONFIRMADO · {detail or 'servicio no activo'}")
+
+    # No hacer rollback global: podría reabrir puertos cerrados o pisar cambios
+    # concurrentes. El backup queda disponible para recuperación manual.
+    if failures:
+        print("[3/3] Hay verificaciones fallidas; no se declara éxito.")
+        print("No se ejecutó rollback automático para no alterar otros listeners.")
+        for warning in (report.get("warnings") or [])[:5]:
+            print_wrapped("Advertencia: " + str(warning))
+        print(f"Backup conservado en: {backup_file}")
+        return
+
+    print("[3/3] Protocolos con puertos previamente abiertos configurados y verificados.")
+    print("Los puertos cerrados y TLS Tunnel/443 quedaron fuera de esta operación.")
     for warning in report.get("warnings") or []:
         print_wrapped("Advertencia: " + str(warning))
     print(f"Backup conservado en: {backup_file}")

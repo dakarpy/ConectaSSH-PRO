@@ -17,21 +17,59 @@ cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
 
 
-class PublicSSHHTTPDisplayTest(unittest.TestCase):
-    def test_compact_display_preserves_status_and_extra_ports(self):
-        self.assertEqual(cli.public_ssh_http_display({
-            "listen": "disabled", "extra_listen": ["0.0.0.0:8080"]
-        }), ("OFF :8080", False))
-        self.assertEqual(cli.public_ssh_http_display({
-            "listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]
-        }), ("ON :8080", True))
+class AutoMenuHookTest(unittest.TestCase):
+    def test_enable_installs_root_only_ssh_hook_atomically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            with patch.object(cli, "AUTO_MENU_HOOK", hook):
+                cli.sync_auto_menu_hook(True)
+            content = hook.read_text()
+            self.assertIn(cli.AUTO_MENU_MARKER, content)
+            self.assertIn('"$(id -u 2>/dev/null)" = "0"', content)
+            self.assertIn('SSH_CONNECTION', content)
+            self.assertIn('[ -t 0 ] && [ -t 1 ]', content)
+            self.assertEqual(hook.stat().st_mode & 0o777, 0o644)
 
-    def test_compact_display_omits_disabled_endpoints_and_fits_mobile(self):
-        config = {"listen": "disabled", "extra_listen": ["disabled", "0.0.0.0:8080"]}
-        value, enabled = cli.public_ssh_http_display(config)
-        self.assertEqual(value, "OFF :8080")
-        self.assertFalse(enabled)
-        with patch.object(cli, "request", return_value=config):
+    def test_disable_removes_only_managed_hook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            hook.write_text(cli.AUTO_MENU_MARKER + "\n")
+            with patch.object(cli, "AUTO_MENU_HOOK", hook):
+                cli.sync_auto_menu_hook(False)
+            self.assertFalse(hook.exists())
+
+    def test_enable_does_not_overwrite_unrelated_profile_script(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            hook.write_text("# unrelated administrator profile hook\n")
+            with patch.object(cli, "AUTO_MENU_HOOK", hook):
+                with self.assertRaises(cli.CLIError):
+                    cli.sync_auto_menu_hook(True)
+            self.assertEqual(hook.read_text(), "# unrelated administrator profile hook\n")
+
+
+class PublicSSHHTTPDisplayTest(unittest.TestCase):
+    def test_display_only_shows_ports_configured_public_and_actually_listening(self):
+        config = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]}
+        with patch.object(cli, "websocket_port_is_listening", side_effect=lambda port: port == 8080):
+            self.assertEqual(cli.public_ssh_http_display(config), ("8080", True))
+        with patch.object(cli, "websocket_port_is_listening", return_value=False):
+            self.assertEqual(cli.public_ssh_http_display(config), ("--", False))
+
+    def test_loopback_listener_is_not_shown_as_public(self):
+        config = {"listen": "127.0.0.1:18080", "extra_listen": []}
+        with patch.object(cli, "websocket_port_is_listening", return_value=True):
+            self.assertEqual(cli.public_ssh_http_display(config), ("--", False))
+
+    def test_display_omits_unconfigured_port_even_if_socket_exists(self):
+        config = {"listen": "disabled", "extra_listen": []}
+        with patch.object(cli, "websocket_port_is_listening", return_value=True):
+            self.assertEqual(cli.public_ssh_http_display(config), ("--", False))
+
+    def test_main_menu_fits_mobile_width(self):
+        config = {"listen": "disabled", "extra_listen": []}
+        with patch.object(cli, "request", return_value=config), \
+                patch.object(cli, "websocket_port_is_listening", return_value=False):
             rendered = cli.render_menu("MAIN MENU", cli.main_menu_options(), columns=40)
         self.assertLessEqual(max(map(len, rendered.splitlines())), 40)
 
@@ -48,12 +86,16 @@ class WebsocketPort80MenuTest(unittest.TestCase):
 
     def test_deactivate_main_port80_preserves_8080(self):
         config = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]}
-        with patch.object(cli, "request", return_value=config), patch.object(cli, "save_settings") as save:
+        saved_config = {"listen": "127.0.0.1:18080", "extra_listen": ["0.0.0.0:8080"]}
+        saved_config = {"listen": "127.0.0.1:18080", "extra_listen": []}
+        with patch.object(cli, "request", side_effect=[config, saved_config]), \
+                patch.object(cli, "save_settings") as save, \
+                patch.object(cli, "websocket_port_is_listening", return_value=False):
             with redirect_stdout(io.StringIO()):
                 cli.websocket_port80_deactivate()
         saved = save.call_args.args[1]
-        self.assertEqual(saved["listen"], "disabled")
-        self.assertEqual(saved["extra_listen"], ["0.0.0.0:8080"])
+        self.assertEqual(saved["listen"], "127.0.0.1:18080")
+        self.assertEqual(saved["extra_listen"], [])
 
     def test_websocket_menu_exposes_live_status_and_manual_controls(self):
         config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
@@ -441,6 +483,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(cli, "INSTALL_DIR", Path(temp)), \
                 patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), report]) as request, \
+                patch.object(cli, "transport_port_is_listening", return_value=True), \
                 patch("builtins.input", side_effect=AssertionError("TLS prompt must not appear")), \
                 redirect_stdout(io.StringIO()) as output:
             cli.auto_configure()
@@ -459,7 +502,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertEqual(payload["tls_forwarders"], cfg["tls_forwarders"])
         self.assertEqual(payload["users"], [{"username": "keep"}])
         self.assertEqual(len(backups), 1, output.getvalue())
-        self.assertIn("TLS Tunnel quedó fuera", output.getvalue())
+        self.assertIn("TLS Tunnel/443 quedaron fuera", output.getvalue())
 
     def test_auto_configure_rolls_back_when_a_service_fails(self):
         cfg = {"listen": "disabled", "extra_listen": [], "users": []}
@@ -470,14 +513,56 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         restored = {"services": {}}
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(cli, "INSTALL_DIR", Path(temp)), \
-                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), failed, restored]) as request, \
+                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), failed]) as request, \
+                patch.object(cli, "transport_port_is_listening", return_value=True), \
                 patch("builtins.input", side_effect=AssertionError("TLS prompt must not appear")), \
                 redirect_stdout(io.StringIO()) as output:
             cli.auto_configure()
-        self.assertEqual(request.call_count, 3)
-        self.assertEqual(request.call_args_list[2].args[2], cfg)
-        self.assertIn("restauración de la configuración anterior", output.getvalue())
+        self.assertEqual(request.call_count, 2)
+        self.assertIn("No se ejecutó rollback automático", output.getvalue())
         self.assertNotIn("¡Protocolos configurados y activos!", output.getvalue())
+
+
+    def test_auto_configure_only_touches_protocols_with_open_required_ports(self):
+        cfg = {
+            "listen": "127.0.0.1:18080", "extra_listen": [],
+            "tls_forwarders": [{"listen": "0.0.0.0:443"}],
+            "bhttp": {"listen": ["0.0.0.0:8080"], "shared_ports": False},
+            "hcr": {"listen": ["0.0.0.0:8880"], "target": "127.0.0.1:2222"},
+            "udpgw": {"listen": "0.0.0.0:7300"},
+            "xray": {"enabled": False, "mode": "native"},
+            "users": [{"username": "preserve"}],
+        }
+        report = {"services": {"ssh": {"running": True, "listen": "0.0.0.0:8080"}, "bhttp": {"running": True, "listen": "0.0.0.0:8080"}}}
+        def sockets(port, proto):
+            return port == 8080 and proto == "tcp"
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(cli, "INSTALL_DIR", Path(temp)), \
+                patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), report]) as request, \
+                patch.object(cli, "transport_port_is_listening", side_effect=sockets), \
+                redirect_stdout(io.StringIO()) as output:
+            cli.auto_configure()
+        payload = request.call_args_list[1].args[2]
+        self.assertEqual(payload["listen"], "127.0.0.1:18080")
+        self.assertEqual(payload["extra_listen"], ["0.0.0.0:8080"])
+        self.assertEqual(payload["hcr"], cfg["hcr"])
+        self.assertEqual(payload["udpgw"], cfg["udpgw"])
+        self.assertEqual(payload["xray"], cfg["xray"])
+        self.assertEqual(payload["tls_forwarders"], cfg["tls_forwarders"])
+        self.assertEqual(payload["users"], cfg["users"])
+        self.assertIn("UDPGW 7300/UDP: CERRADO", output.getvalue())
+        self.assertIn("Protocolos con puertos previamente abiertos configurados y verificados", output.getvalue())
+
+    def test_auto_configure_does_not_post_if_no_managed_ports_are_open(self):
+        cfg = {"listen": "127.0.0.1:18080", "extra_listen": [], "users": []}
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(cli, "INSTALL_DIR", Path(temp)), \
+                patch.object(cli, "request", return_value=copy.deepcopy(cfg)) as request, \
+                patch.object(cli, "transport_port_is_listening", return_value=False), \
+                redirect_stdout(io.StringIO()) as output:
+            cli.auto_configure()
+        request.assert_called_once_with("GET", "/api/server/config")
+        self.assertIn("No se modificó la configuración", output.getvalue())
 
     def test_main_menu_auto_configure_label_is_short(self):
         self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["12"][0])
