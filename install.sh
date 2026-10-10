@@ -87,10 +87,51 @@ check_udp_ports() {
   return 0
 }
 
+# SSH safety guard: never change sshd or its active port from these scripts.
+detect_active_ssh_port() {
+  local session_port="" configured_port=""
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    read -r _ _ _ session_port <<< "$SSH_CONNECTION"
+  fi
+  if [[ "$session_port" =~ ^[0-9]+$ ]] && (( session_port >= 1 && session_port <= 65535 )); then
+    printf '%s\n' "$session_port"
+    return 0
+  fi
+  if command -v sshd >/dev/null 2>&1; then
+    configured_port="$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+  fi
+  if [[ "$configured_port" =~ ^[0-9]+$ ]] && (( configured_port >= 1 && configured_port <= 65535 )); then
+    printf '%s\n' "$configured_port"
+    return 0
+  fi
+  # Last-resort discovery from listening sockets owned by sshd/ssh.
+  configured_port="$(ss -H -ltnp 2>/dev/null | awk '/sshd|"ssh"/ { n=split($4,a,":"); if (n>1) {p=a[n]; if (p ~ /^[0-9]+$/) {print p; exit}} }')"
+  [[ "$configured_port" =~ ^[0-9]+$ ]] && (( configured_port >= 1 && configured_port <= 65535 )) || return 1
+  printf '%s\n' "$configured_port"
+}
+
+ssh_safety_preflight() {
+  local port
+  port="$(detect_active_ssh_port)" || {
+    error "No se pudo detectar el puerto SSH activo. Se aborta por seguridad."
+  }
+  info "Puerto SSH detectado: ${port}/tcp"
+  if ! ss -H -ltn "( sport = :${port} )" 2>/dev/null | grep -q .; then
+    error "El puerto SSH detectado (${port}) no aparece escuchando. No se continuará."
+  fi
+  if [[ -z "${TMUX:-}" && -z "${STY:-}" ]]; then
+    warn "No se detectó tmux/screen. Se recomienda una sesión persistente y consola del proveedor."
+  fi
+  # Intentional invariant: this installer/updater must not edit sshd_config,
+  # restart sshd, enable UFW, or flush firewall rules.
+}
+
 preflight_checks() {
   info "[PRECHECK] Validando entorno..."
   [[ "$EUID" -eq 0 ]] || error "El instalador debe ejecutarse como root."
   require_systemd
+  command -v ss >/dev/null 2>&1 || error "El comando ss es obligatorio para proteger SSH."
+  ssh_safety_preflight
   case "$(uname -m)" in x86_64|aarch64) ;; *) error "Arquitectura no soportada: $(uname -m)." ;; esac
   [[ -e "$INSTALL_DIR" || -e "/etc/systemd/system/${SERVICE_NAME}.service" ]] && error "Ya existe una instalación de Conecta SSH. Se requiere una VPS limpia."
   local disk_gb ram_mb

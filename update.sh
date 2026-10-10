@@ -37,12 +37,57 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR=""
 FETCH_DIR=""
 RESTART_NEEDED=false
+SERVICE_WAS_ACTIVE=false
+UPDATE_SWAP_DONE=false
+UPDATE_SUCCESS=false
+ROLLBACK_BINARY=""
 BUILD_COMMIT=""
 BUILD_BRANCH=""
 BUILD_TIME=""
 BUILD_REPO_URL=""
 
 [[ $EUID -ne 0 ]] && error "Run as root: sudo bash $0"
+
+# SSH safety guard: never change sshd or its active port from these scripts.
+detect_active_ssh_port() {
+  local session_port="" configured_port=""
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    read -r _ _ _ session_port <<< "$SSH_CONNECTION"
+  fi
+  if [[ "$session_port" =~ ^[0-9]+$ ]] && (( session_port >= 1 && session_port <= 65535 )); then
+    printf '%s\n' "$session_port"
+    return 0
+  fi
+  if command -v sshd >/dev/null 2>&1; then
+    configured_port="$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+  fi
+  if [[ "$configured_port" =~ ^[0-9]+$ ]] && (( configured_port >= 1 && configured_port <= 65535 )); then
+    printf '%s\n' "$configured_port"
+    return 0
+  fi
+  # Last-resort discovery from listening sockets owned by sshd/ssh.
+  configured_port="$(ss -H -ltnp 2>/dev/null | awk '/sshd|"ssh"/ { n=split($4,a,":"); if (n>1) {p=a[n]; if (p ~ /^[0-9]+$/) {print p; exit}} }')"
+  [[ "$configured_port" =~ ^[0-9]+$ ]] && (( configured_port >= 1 && configured_port <= 65535 )) || return 1
+  printf '%s\n' "$configured_port"
+}
+
+ssh_safety_preflight() {
+  local port
+  port="$(detect_active_ssh_port)" || {
+    error "No se pudo detectar el puerto SSH activo. Se aborta por seguridad."
+  }
+  info "Puerto SSH detectado: ${port}/tcp"
+  if ! ss -H -ltn "( sport = :${port} )" 2>/dev/null | grep -q .; then
+    error "El puerto SSH detectado (${port}) no aparece escuchando. No se continuará."
+  fi
+  if [[ -z "${TMUX:-}" && -z "${STY:-}" ]]; then
+    warn "No se detectó tmux/screen. Se recomienda una sesión persistente y consola del proveedor."
+  fi
+  # Intentional invariant: this installer/updater must not edit sshd_config,
+  # restart sshd, enable UFW, or flush firewall rules.
+}
+
+ssh_safety_preflight
 
 # Retire legacy login hooks immediately, before fetching/building/stopping services.
 # This also protects installations where a prior release left the hook behind.
@@ -240,9 +285,26 @@ prepare_source_from_git() {
 }
 
 cleanup_fetch() {
+  local rc=$?
+  if [[ "$UPDATE_SUCCESS" != "true" ]]; then
+    if [[ "$UPDATE_SWAP_DONE" == "true" && -n "$ROLLBACK_BINARY" && -f "$ROLLBACK_BINARY" ]]; then
+      warn "Update incompleto: restaurando binario anterior automáticamente."
+      local staged="$INSTALL_DIR/.sshpanel.rollback.$$"
+      if install -m 0755 "$ROLLBACK_BINARY" "$staged" && mv -f "$staged" "$INSTALL_DIR/sshpanel"; then
+        "$SYSTEMCTL_BIN" daemon-reload >/dev/null 2>&1 || true
+      else
+        warn "No se pudo restaurar automáticamente el binario; respaldo: $ROLLBACK_BINARY"
+      fi
+    fi
+    if [[ "$SERVICE_WAS_ACTIVE" == "true" ]]; then
+      "$SYSTEMCTL_BIN" start "$SERVICE_NAME" >/dev/null 2>&1 || \
+        warn "El servicio no pudo arrancar durante rollback; revisar journalctl -u $SERVICE_NAME"
+    fi
+  fi
   if [[ -n "$FETCH_DIR" && -d "$FETCH_DIR" ]]; then
     rm -rf -- "$FETCH_DIR"
   fi
+  return "$rc"
 }
 trap cleanup_fetch EXIT
 
@@ -303,20 +365,22 @@ build_binary() {
   [[ -n "$BUILD_COMMIT" ]] || BUILD_COMMIT="unknown"
   [[ -n "$BUILD_BRANCH" && "$BUILD_BRANCH" != "HEAD" ]] || BUILD_BRANCH="${UPDATE_REF:-unknown}"
 
+  # Do not mutate go.mod/go.sum during an ordinary update.
   go mod download
-  go mod tidy
   go build -ldflags="-s -w -X main.buildCommit=$BUILD_COMMIT -X main.buildBranch=$BUILD_BRANCH -X main.buildTime=$BUILD_TIME" -o /tmp/sshpanel_new .
   info "  Build commit: $BUILD_COMMIT ($BUILD_BRANCH)"
   info "  Build complete."
 }
 
 stop_service() {
-  info "[4/7] Stopping service..."
+  info "[4/7] Stopping panel service (never ssh/sshd)..."
   if "$SYSTEMCTL_BIN" is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    "$SYSTEMCTL_BIN" stop "$SERVICE_NAME"
+    SERVICE_WAS_ACTIVE=true
     RESTART_NEEDED=true
+    "$SYSTEMCTL_BIN" stop "$SERVICE_NAME"
     info "  $SERVICE_NAME stopped."
   else
+    SERVICE_WAS_ACTIVE=false
     RESTART_NEEDED=false
     warn "  $SERVICE_NAME was not running."
   fi
@@ -371,13 +435,22 @@ apply_update() {
   ensure_log_tmpfs_mount
 
   if [[ -f "$INSTALL_DIR/sshpanel" ]]; then
-    cp "$INSTALL_DIR/sshpanel" "$INSTALL_DIR/sshpanel.bak"
-    info "  Old binary backed up to $INSTALL_DIR/sshpanel.bak"
+    ROLLBACK_BINARY="$INSTALL_DIR/sshpanel.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$INSTALL_DIR/sshpanel" "$ROLLBACK_BINARY"
+    cp -p "$INSTALL_DIR/sshpanel" "$INSTALL_DIR/sshpanel.bak"
+    info "  Versioned rollback copy: $ROLLBACK_BINARY"
+  else
+    error "No existe el binario actual; se aborta para no dejar una instalación sin respaldo."
   fi
 
-  mv /tmp/sshpanel_new "$INSTALL_DIR/sshpanel"
-  chmod 755 "$INSTALL_DIR/sshpanel"
-  info "  Binary updated."
+  # Stage in the same filesystem; atomic rename prevents a partially copied binary.
+  local staged="$INSTALL_DIR/.sshpanel.new.$$"
+  install -m 0755 /tmp/sshpanel_new "$staged"
+  # Set before rename so SIGTERM between rename and the next shell command
+  # still triggers restoration from the versioned backup.
+  UPDATE_SWAP_DONE=true
+  mv -f "$staged" "$INSTALL_DIR/sshpanel"
+  info "  Binary atomically replaced."
 
   printf '%s\n' "$BUILD_COMMIT" > "$INSTALL_DIR/.installed_commit"
   printf '%s\n' "$BUILD_BRANCH" > "$INSTALL_DIR/.installed_branch"
@@ -582,11 +655,9 @@ set -euo pipefail
 DNS_UPSTREAM="${DNS_UPSTREAM:-1.1.1.1}"
 DNSTT_PORT="${DNSTT_PORT:-5300}"
 
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl disable --now systemd-resolved.service >/dev/null 2>&1 || true
-fi
-rm -f /etc/resolv.conf
-printf 'nameserver %s\n' "$DNS_UPSTREAM" > /etc/resolv.conf
+# Do not disable systemd-resolved or overwrite /etc/resolv.conf here.
+# Resolver configuration belongs to the OS/operator; touching it can sever
+# DNS-dependent management paths during an update.
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow 53/udp >/dev/null 2>&1 || true
@@ -715,3 +786,6 @@ echo -e "  - config.json"
 echo -e "  - xray_config.json"
 echo -e "  - SSH keys, certs, logs, database and users"
 echo ""
+
+# Mark transaction committed so the EXIT trap will not roll back.
+UPDATE_SUCCESS=true
