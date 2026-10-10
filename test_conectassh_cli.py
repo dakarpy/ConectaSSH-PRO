@@ -52,6 +52,23 @@ class WebsocketPort80MenuTest(unittest.TestCase):
         self.assertIn("ESTADO NO DISPONIBLE", options["2"][0])
         self.assertIn("ACTIVAR PUERTO 80", options["2"][0])
 
+    def test_actual_port_state_compares_config_and_kernel_listener(self):
+        enabled = {"listen": "0.0.0.0:80", "extra_listen": []}
+        disabled = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
+        self.assertEqual(cli.websocket_port80_actual_state(enabled, listening=True), "ON")
+        self.assertEqual(cli.websocket_port80_actual_state(disabled, listening=False), "OFF")
+        self.assertEqual(cli.websocket_port80_actual_state(enabled, listening=False), "WARN")
+        self.assertEqual(cli.websocket_port80_actual_state(disabled, listening=True), "WARN")
+        self.assertEqual(cli.websocket_port80_actual_state(enabled, listening=None), "WARN")
+
+    def test_websocket_menu_renders_status_line_and_keeps_mobile_width(self):
+        config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
+        with patch.object(cli, "request", return_value=config):
+            rendered = cli.render_menu("WEBSOCKET SSH", cli.websocket_menu_options(),
+                                       columns=40, status_line="ESTADO ACTUAL: (OFF)")
+        self.assertIn("ESTADO ACTUAL: (OFF)", rendered)
+        self.assertLessEqual(max(map(len, rendered.splitlines())), 40)
+
 
 class TokenManagementTest(unittest.TestCase):
     def setUp(self):

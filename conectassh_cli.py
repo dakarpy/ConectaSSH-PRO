@@ -64,7 +64,19 @@ def colorize_menu(lines):
             continue
 
         if "SCRIPT CONECTA SSH -" in raw:
-            out.append(paint(raw, CYAN, True))
+            # El indicador de estado del submenú WebSocket conserva su color semántico.
+            title = re.sub(r"ESTADO ACTUAL: \(ON\)", lambda m: "ESTADO ACTUAL: " + paint("(ON)", GREEN, True), raw)
+            title = re.sub(r"ESTADO ACTUAL: \(OFF\)", lambda m: "ESTADO ACTUAL: " + paint("(OFF)", RED, True), title)
+            title = re.sub(r"ESTADO ACTUAL: \(WARN\)", lambda m: "ESTADO ACTUAL: " + paint("(WARN)", YELLOW, True), title)
+            out.append(paint(title, CYAN, True) if title == raw else title)
+            continue
+
+        if "ESTADO ACTUAL:" in raw:
+            colored = re.sub(r"ESTADO ACTUAL:", lambda m: paint(m.group(0), CYAN, True), raw)
+            colored = re.sub(r"\(ON\)", lambda m: paint(m.group(0), GREEN, True), colored)
+            colored = re.sub(r"\(OFF\)", lambda m: paint(m.group(0), RED, True), colored)
+            colored = re.sub(r"\(WARN\)", lambda m: paint(m.group(0), YELLOW, True), colored)
+            out.append(colored)
             continue
 
         if "[00] • SALIR" in raw:
@@ -1248,18 +1260,63 @@ def websocket_port80_deactivate():
     print("Los demás puertos configurados se conservan.")
 
 
+def websocket_port80_is_listening():
+    """Check the kernel TCP listen tables; this verifies the port, not a WebSocket handshake."""
+    try:
+        for path in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+            lines = path.read_text(encoding="ascii").splitlines()[1:]
+            for line in lines:
+                fields = line.split()
+                if len(fields) > 3 and fields[1].rsplit(":", 1)[-1].upper() == "0050" and fields[3] == "0A":
+                    return True
+        return False
+    except OSError:
+        return None
+
+
+_PORT_STATUS_UNSET = object()
+
+
+def websocket_port80_actual_state(document=None, listening=_PORT_STATUS_UNSET):
+    """Compare configured port 80 with the actual kernel listener; never infer a working WS handshake."""
+    document = document if document is not None else (request("GET", "/api/server/config") or {})
+    configured = any(websocket_port80_status(document))
+    if listening is _PORT_STATUS_UNSET:
+        listening = websocket_port80_is_listening()
+    if listening is None:
+        return "WARN"
+    if configured and listening:
+        return "ON"
+    if not configured and not listening:
+        return "OFF"
+    return "WARN"
+
+
 def websocket_port80_show_status():
     document = request("GET", "/api/server/config") or {}
     main_is_80, extra_is_80 = websocket_port80_status(document)
+    actual = websocket_port80_actual_state(document)
     if main_is_80:
-        status = "ACTIVO como puerto principal"
+        configured_status = "ACTIVO como puerto principal"
     elif extra_is_80:
-        status = "ACTIVO como puerto adicional"
+        configured_status = "ACTIVO como puerto adicional"
     else:
-        status = "DESACTIVADO en ConectaSSH-PRO"
-    print("Puerto 80: " + status)
+        configured_status = "DESACTIVADO en ConectaSSH-PRO"
+    print("Estado actual del puerto 80:", f"({actual})")
+    print("Configuración guardada:", configured_status)
+    print("Puerto 80 escuchando en el sistema:", "SÍ" if websocket_port80_is_listening() else "NO / NO VERIFICABLE")
+    print("Nota: esto verifica el socket TCP; no confirma un handshake WebSocket completo.")
     print("Puerto principal configurado:", document.get("listen") or "--")
     print("Puertos adicionales:", ", ".join(document.get("extra_listen") or []) or "--")
+
+
+def websocket_menu_status_line():
+    try:
+        document = request("GET", "/api/server/config") or {}
+        state = websocket_port80_actual_state(document)
+    except (CLIError, OSError, ValueError, json.JSONDecodeError):
+        state = "WARN"
+    return f"ESTADO ACTUAL: ({state})"
 
 
 def websocket_menu_options():
@@ -1268,11 +1325,11 @@ def websocket_menu_options():
         document = request("GET", "/api/server/config") or {}
         main_is_80, extra_is_80 = websocket_port80_status(document)
         if main_is_80:
-            state = "ACTIVO · PRINCIPAL"
+            state = "CONFIGURADO · PRINCIPAL"
         elif extra_is_80:
-            state = "ACTIVO · ADICIONAL"
+            state = "CONFIGURADO · ADICIONAL"
         else:
-            state = "DESACTIVADO"
+            state = "DESACTIVADO EN CONFIG."
     except (CLIError, OSError, ValueError, json.JSONDecodeError):
         state = "ESTADO NO DISPONIBLE"
     return {
@@ -1284,8 +1341,8 @@ def websocket_menu_options():
 
 
 def websocket_menu():
-    menu("WEBSOCKET SSH · ACTIVACIÓN MANUAL", websocket_menu_options,
-         force_single=True, force_one_page=True)
+    menu("WEBSOCKET SSH", websocket_menu_options,
+         force_single=True, force_one_page=True, status_line=websocket_menu_status_line)
 
 
 def server_settings_menu():
@@ -2081,7 +2138,7 @@ def update_from_git():
     print("Actualización completa. Volvé a abrir el menú para cargar la CLI actualizada.")
 
 
-def render_menu(title, options, vps_status=None, columns=None, two_columns=False):
+def render_menu(title, options, vps_status=None, columns=None, two_columns=False, status_line=None):
     """Render a boxed terminal menu; optionally use the compact two-column layout."""
     cols = columns or terminal_columns()
     # Keep the frame compact on phones, but use the reference layout on normal SSH terminals.
@@ -2134,6 +2191,10 @@ def render_menu(title, options, vps_status=None, columns=None, two_columns=False
     separator = "├" + "─" * width + "┤"
 
     lines = [top]
+    if status_line is not None:
+        status_text = status_line() if callable(status_line) else status_line
+        lines.append(single(status_text))
+        lines.append(separator)
     if vps_status is not None:
         cpu = "--" if vps_status.get("cpu") is None else f"{vps_status['cpu']:.1f}%"
         if vps_status.get("mem_total"):
@@ -2199,7 +2260,7 @@ def clear_screen():
 _menu_calls = 0
 
 
-def menu(title, options, two_columns=False, force_single=False, force_one_page=False):
+def menu(title, options, two_columns=False, force_single=False, force_one_page=False, status_line=None):
     global _menu_calls
     _menu_calls += 1
     page = 0
@@ -2217,7 +2278,7 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
         page = min(page, pages - 1)
         visible = dict(entries[page * page_size:(page + 1) * page_size])
         heading = title + (f" ({page + 1}/{pages})" if pages > 1 else "")
-        print(render_menu(heading, visible, vps, two_columns=auto_two_columns))
+        print(render_menu(heading, visible, vps, two_columns=auto_two_columns, status_line=status_line))
         prompt = paint("Elegí una opción: ", CYAN, True)
         if pages > 1:
             print(" n  Página siguiente   p  Página anterior")
@@ -2245,7 +2306,7 @@ def menu(title, options, two_columns=False, force_single=False, force_one_page=F
                 page = min(page, pages - 1)
                 visible = dict(entries[page * page_size:(page + 1) * page_size])
                 heading = title + (f" ({page + 1}/{pages})" if pages > 1 else "")
-                print(render_menu(heading, visible, vps, two_columns=auto_two_columns))
+                print(render_menu(heading, visible, vps, two_columns=auto_two_columns, status_line=status_line))
                 if pages > 1:
                     print(" n  Página siguiente   p  Página anterior")
                 print(prompt, end="", flush=True)
