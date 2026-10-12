@@ -3168,7 +3168,7 @@ def config_menu():
         "9": ("Registros recientes", logs),
         "10": ("Reiniciar servicio", lambda: service_action("restart")),
         "11": ("ACTUALIZACIÓN DEL PANEL", update_menu),
-        "12": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "12": ("CHECKUSER", checkuser_dual_menu),
         "13": ("DESINSTALAR SCRIPT", uninstall_script),
         "14": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
     }, force_single=True, force_one_page=True)
@@ -3378,7 +3378,7 @@ def main_menu_options():
         "9": ("CONFIGURACIÓN", config_menu),
         "10": ("BANNER SSH", banner_menu),
         "11": ("AUTO CONFIGURAR", auto_configure),
-        "12": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "12": ("CHECKUSER", checkuser_dual_menu),
         "13": ("ACTUALIZAR", update_menu),
     }
 
