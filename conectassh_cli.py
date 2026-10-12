@@ -3325,6 +3325,7 @@ def main_menu_options():
         "1": ("GESTOR DE USUARIOS SSH", ssh_menu),
         "2": ("GESTOR XRAY", xray_menu),
         "3": ("GESTIONAR PROTOCOLOS", connection_menu),
+        "7": ("INFO SISTEMA", connection_status),
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),

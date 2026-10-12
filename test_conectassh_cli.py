@@ -267,6 +267,11 @@ class TokenManagementTest(unittest.TestCase):
             cli.xray_menu()
             self.assertIs(open_menu.call_args.args[1]["7"][1], cli.xray_settings_menu)
 
+    def test_main_menu_has_info_sistema_entry(self):
+        options = cli.main_menu_options()
+        self.assertEqual(options["7"][0], "INFO SISTEMA")
+        self.assertIs(options["7"][1], cli.connection_status)
+
     def test_check_for_update_detects_matching_remote_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(cli, "INSTALL_DIR", Path(directory)), \
