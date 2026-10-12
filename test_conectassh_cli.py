@@ -267,6 +267,25 @@ class TokenManagementTest(unittest.TestCase):
             cli.xray_menu()
             self.assertIs(open_menu.call_args.args[1]["7"][1], cli.xray_settings_menu)
 
+    def test_info_sistema_is_compact_and_uses_existing_config_fields(self):
+        config = {
+            "listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"],
+            "local_ssh_listen": "127.0.0.1:2222", "bhttp": {"listen": [], "shared_ports": True},
+            "hcr": {"listen": ["0.0.0.0:8880"]}, "btun": None, "dnstt": None,
+            "udpgw": {"listen": "0.0.0.0:7300"}, "xray": {"mode": "native", "enabled": True},
+        }
+        with patch.object(cli, "request", side_effect=[config, {"cpu_percent": 25.0}]), \
+                patch.object(cli, "terminal_columns", return_value=48), \
+                redirect_stdout(io.StringIO()) as out:
+            cli.connection_status()
+        rendered = out.getvalue()
+        self.assertIn("INFO SISTEMA", rendered)
+        self.assertIn("SSH público", rendered)
+        self.assertIn("BHTTP", rendered)
+        self.assertIn("HCR", rendered)
+        self.assertIn("Desactivado", rendered)
+        self.assertLessEqual(max(map(len, rendered.splitlines())), 48)
+
     def test_main_menu_has_info_sistema_entry(self):
         options = cli.main_menu_options()
         self.assertEqual(options["7"][0], "INFO SISTEMA")

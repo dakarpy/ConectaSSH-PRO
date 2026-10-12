@@ -2180,27 +2180,72 @@ def status():
 
 
 def connection_status():
-    cfg = request("GET", "/api/server/config")
-    public_listeners = [addr for addr in [cfg.get("listen"), *(cfg.get("extra_listen") or [])]
-                         if addr and str(addr).lower() not in ("disabled", "off")]
-    print_wrapped("SSH público: " + (", ".join(public_listeners) or "DESACTIVADO"))
-    print_wrapped("SSH local: " + cfg.get("local_ssh_listen", "127.0.0.1:2222"))
-    for listener in cfg.get("tls_forwarders") or []:
-        print_wrapped("TLS SSH: " + listener.get("listen", "--"))
+    """Compact system info using only existing local metrics and configured listeners."""
+    cfg = request("GET", "/api/server/config") or {}
+    cols = terminal_columns()
+    width = max(24, min(56, cols - 4))
+    top = "┏" + "━" * width + "┓"
+    sep = "┣" + "━" * width + "┫"
+    bottom = "┗" + "━" * width + "┛"
+
+    def section(title, rows):
+        print(sep)
+        print("┃" + (" " + title).ljust(width)[:width] + "┃")
+        for row in rows:
+            print("┃" + (" " + row).ljust(width)[:width] + "┃")
+
+    print(top)
+    print("┃" + " INFO SISTEMA ".center(width) + "┃")
+    try:
+        os_name = next((line.split("=", 1)[1].strip().strip('"')
+                        for line in Path("/etc/os-release").read_text().splitlines()
+                        if line.startswith("PRETTY_NAME=")), "Linux")
+    except OSError:
+        os_name = "Linux"
+    try:
+        cpu_model = next((line.split(":", 1)[1].strip() for line in
+                          Path("/proc/cpuinfo").read_text().splitlines()
+                          if line.lower().startswith("model name")), os.uname().machine)
+    except OSError:
+        cpu_model = os.uname().machine
+    stats = {}
+    try:
+        stats = request("GET", "/api/stats", timeout=2) or {}
+    except CLIError:
+        pass
+    total_mem, used_mem = local_meminfo()
+    total_mem = stats.get("mem_total_bytes") or total_mem
+    used_mem = stats.get("mem_used_bytes") if stats.get("mem_used_bytes") is not None else used_mem
+    cpu = stats.get("cpu_percent")
+    cpu_label = f"{cpu:.0f}%" if isinstance(cpu, (int, float)) else "No disponible"
+    ram_label = f"{size(used_mem)} / {size(total_mem)}" if total_mem else "No disponible"
+    section("SISTEMA", [f"SO: {os_name}", f"Kernel: {os.uname().release}",
+                        f"CPU: {cpu_model}", f"Núcleos: {os.cpu_count() or 1} | Uso: {cpu_label}",
+                        f"RAM: {ram_label}"])
+
+    public_listeners = [str(addr) for addr in [cfg.get("listen"), *(cfg.get("extra_listen") or [])]
+                        if addr and str(addr).lower() not in ("disabled", "off")]
+    ssh_rows = ["SSH público: " + (", ".join(public_listeners) or "Desactivado"),
+                "SSH local: " + str(cfg.get("local_ssh_listen", "127.0.0.1:2222"))]
+    ssh_rows.extend("TLS SSH: " + str(item.get("listen", "--"))
+                    for item in cfg.get("tls_forwarders") or [])
+    section("PUERTOS SSH", ssh_rows)
+
     for name, label, fields in (
         ("bhttp", "BHTTP", ("listen", "shared_ports")),
-        ("hcr", "HCR", ("listen", "shared_ports")),
-        ("btun", "BTUN", ("tcp_listen", "udp_listen", "shared_ports")),
+        ("hcr", "HCR", ("listen",)),
+        ("btun", "BTUN", ("tcp_listen", "udp_listen")),
         ("dnstt", "DNSTT", ("domain", "udp_listen")),
         ("udpgw", "UDPGW", ("listen",)),
         ("xray", "Xray", ("mode", "enabled")),
     ):
         block = cfg.get(name)
-        if block is None:
-            print(f"{label}: desactivado")
+        if block is None or (name == "xray" and not block.get("enabled", True)):
+            value = "Desactivado"
         else:
-            details = "  ".join(f"{f}={block[f]}" for f in fields if f in block)
-            print_wrapped(f"{label}: configurado  {details}")
+            value = ", ".join(f"{field}={block[field]}" for field in fields if field in block) or "Configurado"
+        section(label, [value])
+    print(bottom)
 
 
 def protocol_stats():
