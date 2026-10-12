@@ -473,38 +473,37 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
+    """Compact SSHPlus-style rows that adapt to narrow/zoomed mobile terminals."""
     users = sorted(request("GET", "/api/users") or [],
                    key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
-    if cols < 60:
-        print("USUARIO              SENHA")
-        print("LIMITE               EXPIRACAO")
-        print("-" * min(38, cols - 2))
-        for u in users:
-            username = str(u.get("username", ""))[:20]
-            password = str(u.get("password") or "********")[:12]
-            print(f"{username:<20} {password}")
-            expiry = _expiry_remaining_label(u.get("expires_at"))
-            print(f"LIMITE {u.get('max_connections', 0):<5}  {expiry}")
-            print("-" * min(38, cols - 2))
-    else:
-        width = min(70, cols - 2)
-        border = "━" * width
-        print("┏" + border + "┓")
-        print("┃" + "USUARIO".ljust(15) + "SENHA".ljust(13) +
-              "LIMITE".ljust(9) + "EXPIRACAO".ljust(width - 37) + "┃")
-        print("┗" + border + "┛")
-        for u in users:
-            username = str(u.get("username", ""))[:14]
-            # The regular users API deliberately never returns plaintext passwords.
-            password = str(u.get("password") or "********")[:12]
-            limit = str(u.get("max_connections", 0))
-            expiry = _expiry_remaining_label(u.get("expires_at"))
-            row = f"{username:<15}{password:<13}{limit:<9}{expiry}"
-            print("┃" + row[:width].ljust(width) + "┃")
-            print(border)
+    line_width = max(20, cols - 2)
+    separator = "━" * line_width
+    print("USUARIO       SENHA       LIMITE   EXPIRACAO" if cols >= 60 else "USUARIO | SENHA")
+    print(separator)
+    for u in users:
+        username = str(u.get("username", ""))
+        # PAM uses the Linux system password; its one-way hash cannot be reversed.
+        password = str(u.get("password") or ("PAM" if u.get("use_pam") else "N/D"))
+        limit = str(u.get("max_connections", 0))
+        expiry = _expiry_remaining_label(u.get("expires_at"))
+        if cols < 60:
+            # Two short lines avoid horizontal wrapping when a phone is zoomed in.
+            first = f"{username[:max(6, min(16, cols // 2))]} | {password[:10]}"
+            second = f"Lim: {limit} | {expiry}"
+            print(first[:line_width])
+            print(second[:line_width])
+        else:
+            # No vertical box edges: zooming/wrapping cannot cut an enclosing frame.
+            row = f"{username[:14]:<15}{password[:10]:<12}{limit:>5}   {expiry}"
+            print(row[:line_width])
+        print(separator)
     print(f"Total de usuarios: {len(users)}")
-    print("Nota: SENHA oculta por seguridad/API.")
+    if cols < 60:
+        print("PAM=clave Linux; N/D=sin clave panel.")
+    else:
+        print("PAM = clave de Linux; no se puede recuperar del hash.")
+        print("N/D = no hay contraseña guardada en el panel.")
     return users
 
 

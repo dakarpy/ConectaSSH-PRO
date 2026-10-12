@@ -573,7 +573,7 @@ class SSHPlusStyleUserListTest(unittest.TestCase):
         self.assertIn("LIMITE", rendered)
         self.assertIn("EXPIRACAO", rendered)
         self.assertIn("adan", rendered)
-        self.assertIn("********", rendered)
+        self.assertIn("N/D", rendered)
         self.assertNotIn("Consumo 0.0 B", rendered)
         self.assertNotIn("conectados", rendered)
 

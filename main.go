@@ -1832,7 +1832,9 @@ func startAdminAPI(store *Store, addr string) {
 
 // UserDTO is returned by the admin API for listing.
 type UserDTO struct {
-	Username           string     `json:"username"`
+	Username string `json:"username"`
+	// Password is returned only by this authenticated, owner-filtered admin API so operators can verify/recover SSH credentials.
+	Password           string     `json:"password,omitempty"`
 	ActiveConns        int        `json:"active_conns"`
 	MaxConnections     int        `json:"max_connections"`
 	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
@@ -1974,6 +1976,7 @@ func handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 		out = append(out, UserDTO{
 			Username:            cfg.Username,
+			Password:            cfg.Password,
 			ActiveConns:         c,
 			MaxConnections:      cfg.MaxConnections,
 			ExpiresAt:           expires,
