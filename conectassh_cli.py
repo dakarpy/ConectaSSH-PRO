@@ -1987,22 +1987,66 @@ def managed_server_field(server_id, field):
     save_settings("/api/servers", payload)
 
 
+def managed_server_add():
+    print("\nVINCULAR VPS SECUNDARIA")
+    print("La URL debe usar HTTPS con certificado válido. No uses la contraseña SSH.")
+    print("Se necesita el usuario y contraseña ADMINISTRADOR DEL PANEL remoto.")
+    name = ask("Nombre identificador de la VPS")
+    base_url = ask("URL HTTPS de la API (ej. https://vps.example.com:8443)").rstrip("/")
+    parsed = urllib.parse.urlsplit(base_url)
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise CLIError("La URL debe ser HTTPS válida, sin credenciales incrustadas")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise CLIError("Ingresá solamente esquema, dominio/IP y puerto; sin ruta ni parámetros")
+    admin_username = ask("Usuario administrador remoto", "admin") or "admin"
+    admin_key = getpass.getpass("Contraseña del administrador del panel remoto: ")
+    if not admin_key:
+        raise CLIError("La contraseña no puede estar vacía")
+    payload = {"name": name, "base_url": base_url, "admin_username": admin_username,
+               "admin_key": admin_key, "enable_ssh": True, "enable_xray": False,
+               "is_active": True}
+    print("Probando autenticación remota…")
+    result = request("POST", "/api/servers/test", payload, timeout=40)
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise CLIError("La API remota no confirmó la autenticación; no se guardó la VPS")
+    print("Autenticación correcta. Guardando la vinculación…")
+    saved = request("POST", "/api/servers", payload, timeout=40)
+    print(f"VPS vinculada: {saved.get('name')} (ID {saved.get('id')}).")
+    print("Nota: la vinculación habilita el servidor en el registro; no significa que todas las operaciones globales estén implementadas aún.")
+
+
+def managed_server_test(server_id):
+    server = next((row for row in request("GET", "/api/servers") or []
+                   if str(row.get("id")) == str(server_id)), None)
+    if server is None or server.get("is_local"):
+        raise CLIError("Servidor remoto no encontrado")
+    result = request("POST", "/api/servers/test", {
+        "id": str(server_id), "name": server.get("name"), "base_url": server.get("base_url"),
+        "admin_username": server.get("admin_username"), "admin_key": "",
+        "enable_ssh": server.get("enable_ssh", True), "enable_xray": server.get("enable_xray", False),
+        "is_active": server.get("is_active", True),
+    }, timeout=40)
+    print("Conexión y autenticación remota: OK" if isinstance(result, dict) and result.get("ok") else "La API no confirmó la conexión")
+
+
 def managed_server_edit(server_id):
-    fields = (("name", "Nombre del servidor"), ("base_url", "URL de la API"),
+    fields = (("name", "Nombre del servidor"), ("base_url", "URL de la API HTTPS"),
               ("admin_username", "Usuario administrador remoto"), ("is_active", "Activo"),
               ("enable_ssh", "Permitir cuentas SSH"), ("enable_xray", "Permitir clientes Xray"))
-    menu("SERVIDOR ADMINISTRADO", {str(i): (label, lambda f=field: managed_server_field(server_id, f))
-                            for i, (field, label) in enumerate(fields, 1)}, force_single=True, force_one_page=True)
+    options = {str(i): (label, lambda f=field: managed_server_field(server_id, f))
+               for i, (field, label) in enumerate(fields, 1)}
+    options[str(len(options) + 1)] = ("Probar conexión API", lambda: managed_server_test(server_id))
+    menu("SERVIDOR ADMINISTRADO", options, force_single=True, force_one_page=True)
 
 
 def managed_servers_menu():
     servers = [server for server in managed_server_summary() if not server.get("is_local")]
-    if not servers:
-        print("No hay servidores remotos configurados. Agregá un servidor mediante la API autenticada.")
-        return
-    menu("SERVIDORES ADMINISTRADOS", {str(i): (f"{server.get('name')} ({server.get('id')})",
-                                     lambda sid=server.get("id"): managed_server_edit(sid))
-                             for i, server in enumerate(servers, 1)})
+    options = {str(i): (f"{server.get('name')} ({server.get('id')})",
+                        lambda sid=server.get("id"): managed_server_edit(sid))
+               for i, server in enumerate(servers, 1)}
+    options[str(len(options) + 1)] = ("Agregar y vincular nueva VPS", managed_server_add)
+    options[str(len(options) + 2)] = ("Actualizar lista / estado registrado", managed_server_summary)
+    menu("SERVIDORES ADMINISTRADOS", options, force_single=True, force_one_page=True)
 
 
 def _banner_status(cfg):
