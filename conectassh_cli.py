@@ -691,6 +691,35 @@ def edit_user():
         print("Contraseña SSH generada:", p["password"])
 
 
+def edit_user_limit():
+    """Change only the SSH connection limit, preserving every other setting."""
+    name = ask("Usuario SSH").lower()
+    u = get_user(name)
+    if not u:
+        raise CLIError("Usuario no encontrado")
+    p = user_payload(u)
+    p["max_connections"] = number("Máximo de conexiones", u.get("max_connections", 1), 0, 10000)
+    request("POST", "/api/users/create", p)
+    print(f"Límite de conexiones actualizado para {name}.")
+
+
+def edit_user_password():
+    """Set a new SSH password without changing expiry, quota or connection limits."""
+    name = ask("Usuario SSH").lower()
+    u = get_user(name)
+    if not u:
+        raise CLIError("Usuario no encontrado")
+    if u.get("use_pam"):
+        raise CLIError("Este usuario usa PAM de Linux; cambiale la contraseña del sistema por el procedimiento PAM correspondiente.")
+    password = ask("Nueva contraseña SSH (mínimo 1 carácter)")
+    if not password:
+        raise CLIError("La contraseña no puede estar vacía")
+    p = user_payload(u)
+    p["password"] = password
+    request("POST", "/api/users/create", p)
+    print(f"Contraseña SSH actualizada para {name}.")
+
+
 def delete_user():
     name = ask("SSH username").lower()
     if confirm(f"¿Eliminar el usuario SSH {name}?"):
@@ -2633,16 +2662,19 @@ def ssh_menu():
     menu("GESTOR DE USUARIOS SSH", {
         "1": ("Crear usuario", create_user),
         "2": ("Crear prueba", create_test_user),
-        "3": ("Remover usuario", delete_user),
+        "3": ("Eliminar usuario", delete_user),
         "4": ("Renovar usuario", renew_user),
-        "5": ("Editar usuario", edit_user),
-        "6": ("Usuarios online", user_report),
-        "7": ("Informe de usuarios", user_report),
-        "8": ("Remover expirados", delete_expired_users),
-        "9": ("Listar usuarios", list_users),
-        "10": ("Restablecer tráfico", reset_traffic),
-        "11": (f"USUARIO PAM: {pam_state}", pam_auth_menu),
-        "12": (f"LIMITAR SSH: {limit_state}", ssh_connection_limit_toggle),
+        "5": ("Usuarios online", user_report),
+        "6": ("Editar usuario", edit_user),
+        "7": ("Editar límite", edit_user_limit),
+        "8": ("Editar contraseña", edit_user_password),
+        "9": ("Remover expirados", delete_expired_users),
+        "10": ("Informe de usuarios", user_report),
+        # Funciones existentes no incluidas en el orden solicitado quedan al final.
+        "11": ("Listar usuarios", list_users),
+        "12": ("Restablecer tráfico", reset_traffic),
+        "13": (f"USUARIO PAM: {pam_state}", pam_auth_menu),
+        "14": (f"LIMITAR SSH: {limit_state}", ssh_connection_limit_toggle),
     }, two_columns=True)
 
 
