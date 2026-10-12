@@ -2642,7 +2642,28 @@ def restore_own_backup(path):
     print(f"✖️ Entradas Xray: {len((xray or {}).get('inbounds') or [])}")
 
 
+def inspect_sshplus_backup(path):
+    result = subprocess.run(["python3", "/opt/sshpanel/sshplus_backup.py", "inspect", str(path)],
+                            capture_output=True, text=True, timeout=120)
+    try:
+        summary = json.loads(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise CLIError(result.stderr.strip() or "No se pudo inspeccionar el backup SSHPlus")
+    if result.returncode != 0 or not summary.get("ok"):
+        raise CLIError(summary.get("error") or result.stderr.strip() or "Backup SSHPlus inválido")
+    return summary
+
+
 def restore_sshplus_backup(path):
+    # Inspect again immediately before restoring; never trust a stale menu preview.
+    summary = inspect_sshplus_backup(path)
+    if not summary.get("ready") or summary.get("users_found") != 95:
+        raise CLIError(f"Restauración cancelada: se requieren exactamente 95 usuarios válidos; detectados {summary.get('users_found')}.")
+    print("\nINSPECCIÓN DEL BACKUP SSHPLUS")
+    print(f"📁 Archivo: {Path(path).name}")
+    print(f"👤 Usuarios válidos: {summary.get('users_found')}/95")
+    print("🔒 Usuario root: excluido; no se modifica")
+    print("🛡️ Archivos /etc/passwd, /etc/shadow, /etc/group y /etc/gshadow: no se sobrescriben")
     result = subprocess.run(["python3", "/opt/sshpanel/sshplus_backup.py", "restore", str(path)],
                             capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
@@ -2680,14 +2701,31 @@ def restore_own_backup_menu():
 
 def restore_sshplus_from_menu():
     require_root()
-    paths = sorted(Path("/root").glob("ConectaSSH-users-backup-*.vps"),
-                   key=lambda p: p.stat().st_mtime, reverse=True)
-    path = _choose_backup(paths, "BACKUPS SSHPLUS")
+    candidates = sorted(Path("/root").glob("*.vps"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+    paths = []
+    print("\nBUSCAR BACKUP SSHPLUS EN /root")
+    for candidate in candidates:
+        try:
+            summary = inspect_sshplus_backup(candidate)
+            if summary.get("ready") and summary.get("users_found") == 95:
+                paths.append(candidate)
+                print(f"[✓] {candidate.name}: 95 usuarios compatibles")
+            else:
+                print(f"[-] {candidate.name}: no coincide con el backup esperado de 95 usuarios")
+        except (CLIError, OSError, subprocess.SubprocessError):
+            # A .vps file that is not a compatible SSHPlus archive is ignored safely.
+            continue
+    path = _choose_backup(paths, "BACKUPS SSHPLUS COMPATIBLES")
     if not path:
-        print("\nNo se encontró un backup SSHPlus .vps en /root.")
-        print("Copiá el .vps de SSHPlus a /root y volvé a entrar.")
+        print("\nNo se encontró un backup SSHPlus compatible en /root.")
+        print("Copiá el archivo .vps (por ejemplo, backup.vps) a /root y volvé a entrar.")
         return
-    if confirm(f"¿Importar usuarios de SSHPlus desde {path.name}?"):
+    summary = inspect_sshplus_backup(path)
+    print(f"\nBackup detectado: {path.name}")
+    print(f"Usuarios importables: {summary.get('users_found')}/95")
+    print("Root: excluido. No se sobrescriben archivos globales de cuentas.")
+    if confirm(f"¿Restaurar únicamente esos 95 usuarios desde {path.name}?"):
         restore_sshplus_backup(path)
 
 
@@ -2695,7 +2733,7 @@ def user_backup_menu():
     menu("BACKUP Y RESTAURACIÓN", {
         "1": ("Crear Backup Conecta SSH (SSH + Xray)", backup_users),
         "2": ("Restaurar Backup Conecta SSH", restore_own_backup_menu),
-        "3": ("Restaurar Backup SSHPlus", restore_sshplus_from_menu),
+        "3": ("BUSCAR BACKUP SSHPLUS (.vps en /root)", restore_sshplus_from_menu),
     }, force_single=True, force_one_page=True)
 
 def optimize_vps():

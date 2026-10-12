@@ -1,94 +1,194 @@
 #!/usr/bin/env python3
-import json, os, re, secrets, subprocess, tarfile, tempfile, datetime as dt
+"""Safe SSHPlus .vps importer for ConectaSSH-PRO.
+
+Never extracts archive members to disk and never writes /etc/passwd, /etc/shadow,
+groups, root credentials, or Linux accounts. Only imports validated non-root
+users through the panel API.
+"""
+import datetime as dt
+import json
+import os
+import re
+import secrets
+import subprocess
+import tarfile
 from pathlib import Path
 import urllib.request
-BASE=Path('/opt/sshpanel'); ROOT=Path('/root')
 
-def req(method,path,data=None,timeout=120):
-    env={}
-    for line in (BASE/'.env').read_text().splitlines():
+BASE = Path('/opt/sshpanel')
+ROOT = Path('/root')
+VALID_USER = re.compile(r'^[A-Za-z0-9._-]{1,32}$')
+EXPECTED_USERS = 95
+MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+MAX_MEMBER_BYTES = 32 * 1024 * 1024
+
+
+def req(method, path, data=None, timeout=120):
+    env = {}
+    env_path = BASE / '.env'
+    for line in env_path.read_text().splitlines():
         if '=' in line:
-            k,v=line.split('=',1); env[k.strip()]=v.strip().strip('"')
-    addr=env.get('ADMIN_HTTP_ADDR','127.0.0.1:9090').rsplit(':',1)[-1]
-    url='http://127.0.0.1:'+addr+path
-    body=None; headers={'Content-Type':'application/json','Authorization':'Bearer '+env.get('ADMIN_TOKEN','')}
-    if data is not None: body=json.dumps(data).encode()
-    r=urllib.request.Request(url,data=body,headers=headers,method=method)
-    return json.loads(urllib.request.urlopen(r,timeout=timeout).read())
+            k, v = line.split('=', 1)
+            env[k.strip()] = v.strip().strip('"')
+    addr = env.get('ADMIN_HTTP_ADDR', '127.0.0.1:9090').rsplit(':', 1)[-1]
+    url = 'http://127.0.0.1:' + addr + path
+    body = None
+    headers = {'Content-Type': 'application/json',
+               'Authorization': 'Bearer ' + env.get('ADMIN_TOKEN', '')}
+    if data is not None:
+        body = json.dumps(data).encode()
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read())
 
-def hashpw(p):
-    salt=secrets.token_urlsafe(10)[:12]
-    return subprocess.check_output(['openssl','passwd','-6','-salt',salt,p],text=True).strip()
 
-def expiry_days(x):
-    if not x:return ''
-    try:return str((dt.datetime.fromisoformat(x.replace('Z','+00:00')).date()-dt.date(1970,1,1)).days)
-    except:return ''
+def _archive_data(path):
+    path = Path(path)
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('El backup no es un archivo regular.')
+    if path.stat().st_size <= 0 or path.stat().st_size > MAX_ARCHIVE_BYTES:
+        raise ValueError('Tamaño del backup fuera del rango permitido.')
+    with tarfile.open(path, 'r:*') as archive:
+        members = archive.getmembers()
+        if len(members) > 20000:
+            raise ValueError('El backup contiene demasiados elementos.')
+        files = {}
+        for member in members:
+            name = member.name.lstrip('./')
+            parts = Path(name).parts
+            if not name or name.startswith('/') or '..' in parts:
+                raise ValueError('El backup contiene una ruta insegura.')
+            if not (member.isfile() or member.isdir()):
+                raise ValueError('El backup contiene enlaces u objetos especiales; se rechaza por seguridad.')
+            if member.size > MAX_MEMBER_BYTES:
+                raise ValueError('Un elemento del backup excede el tamaño permitido.')
+            if member.isfile():
+                if name in files:
+                    raise ValueError('El backup contiene rutas duplicadas.')
+                handle = archive.extractfile(member)
+                if handle is None:
+                    raise ValueError('No se pudo leer un elemento del backup.')
+                files[name] = handle.read(MAX_MEMBER_BYTES + 1)
+                if len(files[name]) > MAX_MEMBER_BYTES:
+                    raise ValueError('Un elemento excede el tamaño permitido.')
+    def text(name, required=False):
+        value = files.get(name)
+        if value is None:
+            if required:
+                raise ValueError('Falta el archivo requerido: ' + name)
+            return ''
+        return value.decode('utf-8', errors='replace')
+    db = text('root/usuarios.db', required=True)
+    passwd = text('etc/passwd', required=True)
+    shadow = text('etc/shadow', required=True)
+    pass_users = {line.split(':', 1)[0] for line in passwd.splitlines() if ':' in line}
+    shadow_expiry = {}
+    for line in shadow.splitlines():
+        fields = line.split(':')
+        if len(fields) >= 8 and fields[0] and fields[7].isdigit():
+            try:
+                day = int(fields[7])
+                shadow_expiry[fields[0]] = (
+                    dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+                    + dt.timedelta(days=day)).isoformat().replace('+00:00', 'Z')
+            except (OverflowError, ValueError):
+                pass
+    rows, skipped = [], []
+    seen = set()
+    for line in db.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        username = fields[0]
+        if username.lower() == 'root':
+            skipped.append('root')
+            continue
+        if not VALID_USER.fullmatch(username):
+            skipped.append('invalid_username')
+            continue
+        if username in seen:
+            raise ValueError('El backup repite el usuario ' + username)
+        seen.add(username)
+        if username not in pass_users:
+            skipped.append('no_system_account')
+            continue
+        cred_path = 'etc/SSHPlus/senha/' + username
+        raw_password = files.get(cred_path)
+        if not raw_password:
+            skipped.append('missing_password')
+            continue
+        password = raw_password.decode('utf-8', errors='replace').splitlines()
+        if not password or not password[0]:
+            skipped.append('empty_password')
+            continue
+        try:
+            limit = int(fields[1]) if len(fields) > 1 else 1
+        except ValueError:
+            raise ValueError('Límite inválido para el usuario ' + username)
+        if not 1 <= limit <= 100000:
+            raise ValueError('Límite fuera de rango para el usuario ' + username)
+        rows.append({
+            'username': username,
+            'password': password[0],
+            'max_connections': limit,
+            'expires_at': shadow_expiry.get(username, ''),
+            'use_pam': False,
+        })
+    if not rows:
+        raise ValueError('No se encontraron usuarios importables.')
+    return rows, len(members), skipped
 
-def backup():
-    users=req('GET','/api/users/backup',timeout=120).get('users',[])
-    stamp=dt.datetime.now().strftime('%Y%m%d-%H%M%S'); out=ROOT/f'ConectaSSH-users-backup-{stamp}.vps'
-    with tempfile.TemporaryDirectory() as td:
-        t=Path(td); (t/'root').mkdir(); (t/'etc/SSHPlus/senha').mkdir(parents=True)
-        files={n:(Path('/etc')/n).read_text(errors='replace').splitlines() for n in ['passwd','shadow','group','gshadow'] if (Path('/etc')/n).exists()}
-        used=set()
-        for l in files.get('passwd',[]):
-            f=l.split(':')
-            for i in (2,3):
-                if len(f)>i and f[i].isdigit():used.add(int(f[i]))
-        uid=max([1000]+list(used))+1; db=[]; valid=re.compile(r'^[A-Za-z0-9._-]{1,32}$')
-        def merge(lines,u,v):
-            found=False; outl=[]
-            for l in lines:
-                if l.startswith(u+':'):
-                    if not found: outl.append(v); found=True
-                else: outl.append(l)
-            return outl if found else outl+[v]
-        for u in users:
-            name=str(u.get('username','')).strip(); pw=str(u.get('password',''))
-            if not valid.fullmatch(name) or not pw:continue
-            mc=max(1,int(u.get('max_connections') or 1)); db.append(f'{name} {mc}')
-            old=next((l for l in files['passwd'] if l.startswith(name+':')),None)
-            if old:
-                f=old.split(':'); nuid=int(f[2]); ngid=int(f[3]); home=f[5] if len(f)>5 and f[5] else '/home/'+name; shell=f[6] if len(f)>6 and f[6] else '/bin/false'
-            else:
-                while uid in used:uid+=1
-                nuid=ngid=uid; used.add(uid); uid+=1; home='/home/'+name; shell='/bin/false'
-            files['passwd']=merge(files['passwd'],name,f'{name}:x:{nuid}:{ngid}::{home}:{shell}')
-            files['group']=merge(files.get('group',[]),name,f'{name}:x:{ngid}:')
-            files['gshadow']=merge(files.get('gshadow',[]),name,f'{name}:!::')
-            d=expiry_days(u.get('expires_at')); day=(dt.date.today()-dt.date(1970,1,1)).days
-            hp=hashpw(pw)
-            sh=f'{name}:{hp}:{day}:0:99999:7::{d}:' if d else f'{name}:{hp}:{day}:0:99999:7:::'
-            files['shadow']=merge(files['shadow'],name,sh); (t/'etc/SSHPlus/senha'/name).write_text(pw+'\n')
-        (t/'root/usuarios.db').write_text('\n'.join(db)+'\n')
-        for n in ['passwd','shadow','group','gshadow']:(t/'etc'/n).write_text('\n'.join(files.get(n,[]))+'\n')
-        with tarfile.open(out,'w') as a:
-            for p,arc in [(t/'root/usuarios.db','root/usuarios.db'),(t/'etc/passwd','etc/passwd'),(t/'etc/shadow','etc/shadow'),(t/'etc/group','etc/group'),(t/'etc/gshadow','etc/gshadow'),(t/'etc/SSHPlus','etc/SSHPlus')]:a.add(p,arcname=arc)
-    os.chmod(out,0o600); print('BACKUP',out,'USERS',len(db))
+
+def inspect(path):
+    users, entries, skipped = _archive_data(path)
+    # Report only counts and usernames; never print passwords or password hashes.
+    print(json.dumps({
+        'ok': True, 'file': Path(path).name, 'archive_entries': entries,
+        'users_found': len(users), 'expected_users': EXPECTED_USERS,
+        'root_excluded': True, 'skipped_entries': len(skipped),
+        'users': [{'username': u['username'], 'max_connections': u['max_connections'],
+                   'expires_at': u['expires_at']} for u in users],
+        'ready': len(users) == EXPECTED_USERS and all(u['username'].lower() != 'root' for u in users),
+    }, ensure_ascii=False))
+
 
 def restore(path):
-    with tarfile.open(path,'r:*') as a:
-        def txt(n):
-            try:
-                f=a.extractfile(a.getmember(n)); return f.read().decode(errors='replace') if f else ''
-            except KeyError:return ''
-        db=txt('root/usuarios.db'); sh=txt('etc/shadow'); exp={}
-        for l in sh.splitlines():
-            f=l.split(':')
-            if len(f)>=8 and f[7].isdigit():exp[f[0]]=(dt.datetime(1970,1,1,tzinfo=dt.timezone.utc)+dt.timedelta(days=int(f[7]))).isoformat().replace('+00:00','Z')
-        users=[]
-        for l in db.splitlines():
-            f=l.split()
-            if not f or not re.fullmatch(r'[A-Za-z0-9._-]{1,32}',f[0]):continue
-            try:mc=max(1,int(f[1]))
-            except:mc=1
-            try:pw=txt('etc/SSHPlus/senha/'+f[0]).strip().splitlines()[0]
-            except:continue
-            users.append({'username':f[0],'password':pw,'max_connections':mc,'expires_at':exp.get(f[0],''),'use_pam':True})
-    res=req('POST','/api/users/restore',{'version':1,'created_at':dt.datetime.now(dt.timezone.utc).isoformat(),'users':users},timeout=180); print('RESTORED',res)
+    users, entries, skipped = _archive_data(path)
+    if len(users) != EXPECTED_USERS:
+        raise ValueError(f'Se esperaban exactamente {EXPECTED_USERS} usuarios válidos; se detectaron {len(users)}. No se importó nada.')
+    if any(u['username'].lower() == 'root' for u in users):
+        raise ValueError('Protección root: se canceló la restauración.')
+    # API restore upserts the supplied records only; it does not replace the user table.
+    # Explicitly exclude root and leave system account files untouched.
+    result = req('POST', '/api/users/restore', {
+        'version': 1,
+        'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+        'users': users,
+    }, timeout=180)
+    restored = int(result.get('restored', 0))
+    total = int(result.get('total', -1))
+    if restored != EXPECTED_USERS or total != EXPECTED_USERS:
+        raise RuntimeError(f'Respuesta API inesperada: restored={restored}, total={total}; revisar el panel antes de reintentar.')
+    print('RESTORE_OK')
+    print('USUARIOS_RESTAURADOS', restored)
+    print('ROOT_MODIFICADO', 'NO')
+    print('ARCHIVOS_DE_CUENTAS_DEL_SISTEMA_MODIFICADOS', 'NO')
+    print('BACKUP_ORIGEN', Path(path).name)
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     import sys
-    if len(sys.argv)>1 and sys.argv[1]=='restore':restore(Path(sys.argv[2]))
-    else:backup()
+    if len(sys.argv) == 3 and sys.argv[1] == 'inspect':
+        try:
+            inspect(sys.argv[2])
+        except Exception as exc:
+            print(json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False))
+            raise SystemExit(2)
+    elif len(sys.argv) == 3 and sys.argv[1] == 'restore':
+        try:
+            restore(sys.argv[2])
+        except Exception as exc:
+            print('ERROR:', str(exc), file=__import__('sys').stderr)
+            raise SystemExit(2)
+    else:
+        raise SystemExit('Uso: sshplus_backup.py inspect|restore ARCHIVO.vps')
