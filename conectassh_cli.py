@@ -496,7 +496,8 @@ def list_users():
         duration = _expiry_remaining_label(u.get("expires_at"))
         consumption = size(u.get("total_bytes", 0)).replace(" ", "")
         values = (username, password, limit, duration, consumption)
-        row = "".join(str(value)[:w].ljust(w) for value, w in zip(values, widths))
+        row = str(values[0])[:widths[0]].ljust(widths[0]) + "".join(
+            str(value)[:w].center(w) for value, w in zip(values[1:], widths[1:]))
         print(row)
         print("━" * width)
     print(f"Total de usuarios: {len(users)}")
@@ -799,7 +800,8 @@ def user_report():
         duration = _online_duration(item["duration"])
         consumption = size(item["traffic"])
         values = (name, item["limit"], item["connections"], duration, consumption)
-        row = "".join(str(value)[:w].ljust(w) for value, w in zip(values, widths))
+        row = str(values[0])[:widths[0]].ljust(widths[0]) + "".join(
+            str(value)[:w].center(w) for value, w in zip(values[1:], widths[1:]))
         print(row)
         print("━" * width)
     over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
