@@ -592,7 +592,9 @@ class SSHPlusOnlineReportTest(unittest.TestCase):
             {"login": "adela4", "limite": 7, "tempo_online": "1h12m00s"},
             {"login": "zulmaja", "limite": 7, "tempo_online": "1h53m21s"},
         ]
-        with patch.object(cli, "request", return_value=sessions), \
+        users = [{"username": "adela4", "total_bytes": 1536},
+                 {"username": "zulmaja", "total_bytes": 2 * 1024**2}]
+        with patch.object(cli, "request", side_effect=[sessions, users]), \
                 patch.object(cli, "terminal_columns", return_value=80):
             out = io.StringIO()
             with redirect_stdout(out):
@@ -605,10 +607,12 @@ class SSHPlusOnlineReportTest(unittest.TestCase):
         self.assertIn("adela4", rendered)
         self.assertIn("1:38:43", rendered)
         self.assertIn("USUARIOS: 2 ONLINES  -  0 ULTRAPASSARAM", rendered)
-        self.assertNotIn("Consumo", rendered)
+        self.assertIn("CONSUMO", rendered)
+        self.assertIn("1.5 KiB", rendered)
+        self.assertIn("2.0 MiB", rendered)
 
     def test_online_report_empty_state(self):
-        with patch.object(cli, "request", return_value=[]):
+        with patch.object(cli, "request", side_effect=[[], []]):
             out = io.StringIO()
             with redirect_stdout(out):
                 cli.user_report()

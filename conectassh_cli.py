@@ -722,6 +722,13 @@ def _online_duration(value):
 def user_report():
     """SSHPlus-style report of currently connected SSH sessions only."""
     sessions = request("GET", "/api/online/listall.php") or []
+    # The online-session endpoint has no traffic counters; join with the
+    # existing users API so consumption is account-wide and read-only.
+    users = request("GET", "/api/users") or []
+    traffic_by_user = {
+        str(user.get("username") or "").strip().lower(): int(user.get("total_bytes") or 0)
+        for user in users if isinstance(user, dict) and user.get("username")
+    } if isinstance(users, list) else {}
     if isinstance(sessions, dict):
         sessions = sessions.get("users", sessions.get("sessions", []))
     if not sessions:
@@ -735,7 +742,8 @@ def user_report():
         if not name:
             continue
         item = grouped.setdefault(name, {"limit": int(session.get("limite", session.get("max_connections", 0)) or 0),
-                                         "connections": 0, "duration": session.get("tempo_online", session.get("duration", "0s"))})
+                                         "connections": 0, "duration": session.get("tempo_online", session.get("duration", "0s")),
+                                         "traffic": traffic_by_user.get(name.lower(), 0)})
         item["connections"] += 1
         # Display the longest-running connection for this account.
         candidate = _online_duration(session.get("tempo_online", session.get("duration", "0s")))
@@ -744,21 +752,22 @@ def user_report():
     cols = terminal_columns()
     print("Welcome to SSH users online" if cols < 60 else "USUARIOS SSH CONECTADOS")
     if cols < 60:
-        print(f"{'USUARIO':<16} {'LIMITE':>6} {'CONEXAO':>8}")
+        print(f"{'USUARIO':<13} {'LIM':>4} {'CON':>4} {'TEMPO':>8} {'CONSUMO':>10}")
         print("-" * min(cols, 38))
         for name, item in sorted(grouped.items()):
-            print(f"{name[:16]:<16} {item['limit']:>6} {item['connections']:>8}")
-            print("  TEMPO " + _online_duration(item["duration"]))
+            print(f"{name[:13]:<13} {item['limit']:>4} {item['connections']:>4} "
+                  f"{_online_duration(item['duration']):>8} {size(item['traffic']):>10}")
             print("-" * min(cols, 38))
     else:
         width = min(70, cols - 2)
         border = "━" * width
         print("┏" + border + "┓")
-        header = f"{'USUARIO':<16}{'LIMITE':>10}{'CONEXAO':>14}{'TEMPO':>13}"
+        header = f"{'USUARIO':<14}{'LIMITE':>8}{'CONEXAO':>11}{'TEMPO':>12}{'CONSUMO':>13}"
         print("┃" + header[:width].ljust(width) + "┃")
         print("┗" + border + "┛")
         for name, item in sorted(grouped.items()):
-            row = f"{name[:16]:<16}{item['limit']:>10}{item['connections']:>14}{_online_duration(item['duration']):>13}"
+            row = (f"{name[:14]:<14}{item['limit']:>8}{item['connections']:>11}"
+                   f"{_online_duration(item['duration']):>12}{size(item['traffic']):>13}")
             print("┃" + row[:width].ljust(width) + "┃")
             print(border)
     over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
