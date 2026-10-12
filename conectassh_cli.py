@@ -705,15 +705,66 @@ def delete_expired_users():
         print(f"Se eliminaron {len(expired)} usuarios SSH vencidos.")
 
 
+def _online_duration(value):
+    """Render Go duration strings (1h38m43s) as SSHPlus H:MM:SS."""
+    raw = str(value or "").strip()
+    import re
+    parts = {unit: int(amount) for amount, unit in re.findall(r"(\d+)(h|m|s)", raw)}
+    if not parts and raw.isdigit():
+        seconds = int(raw)
+    else:
+        seconds = parts.get("h", 0) * 3600 + parts.get("m", 0) * 60 + parts.get("s", 0)
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
 def user_report():
-    for u in request("GET", "/api/users") or []:
-        print()
-        print_wrapped(f"{u['username']} | conexiones {u.get('active_conns', 0)}/{u.get('max_connections', 0)}"
-                      f" | vence {str(u.get('expires_at') or 'nunca')[:10]}")
-        quota = u.get("data_quota_bytes", 0)
-        print_wrapped(f"Consumo {size(u.get('total_bytes', 0))}/{size(quota) if quota else 'ilimitado'}"
-                      f" | velocidad ↑ {size(u.get('up_bytes_per_sec', 0))}/s"
-                      f" ↓ {size(u.get('down_bytes_per_sec', 0))}/s", "  ")
+    """SSHPlus-style report of currently connected SSH sessions only."""
+    sessions = request("GET", "/api/online/listall.php") or []
+    if isinstance(sessions, dict):
+        sessions = sessions.get("users", sessions.get("sessions", []))
+    if not sessions:
+        print("Nenhum usuário SSH conectado no momento.")
+        print("USUARIOS: 0 ONLINES  -  0 ULTRAPASSARAM")
+        return []
+    # Aggregate simultaneous sessions into one row per account.
+    grouped = {}
+    for session in sessions:
+        name = str(session.get("login") or session.get("username") or "").strip()
+        if not name:
+            continue
+        item = grouped.setdefault(name, {"limit": int(session.get("limite", session.get("max_connections", 0)) or 0),
+                                         "connections": 0, "duration": session.get("tempo_online", session.get("duration", "0s"))})
+        item["connections"] += 1
+        # Display the longest-running connection for this account.
+        candidate = _online_duration(session.get("tempo_online", session.get("duration", "0s")))
+        if candidate > _online_duration(item["duration"]):
+            item["duration"] = session.get("tempo_online", session.get("duration", "0s"))
+    cols = terminal_columns()
+    print("Welcome to SSH users online" if cols < 60 else "USUARIOS SSH CONECTADOS")
+    if cols < 60:
+        print(f"{'USUARIO':<16} {'LIMITE':>6} {'CONEXAO':>8}")
+        print("-" * min(cols, 38))
+        for name, item in sorted(grouped.items()):
+            print(f"{name[:16]:<16} {item['limit']:>6} {item['connections']:>8}")
+            print("  TEMPO " + _online_duration(item["duration"]))
+            print("-" * min(cols, 38))
+    else:
+        width = min(70, cols - 2)
+        border = "━" * width
+        print("┏" + border + "┓")
+        header = f"{'USUARIO':<16}{'LIMITE':>10}{'CONEXAO':>14}{'TEMPO':>13}"
+        print("┃" + header[:width].ljust(width) + "┃")
+        print("┗" + border + "┛")
+        for name, item in sorted(grouped.items()):
+            row = f"{name[:16]:<16}{item['limit']:>10}{item['connections']:>14}{_online_duration(item['duration']):>13}"
+            print("┃" + row[:width].ljust(width) + "┃")
+            print(border)
+    over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
+    print(f"USUARIOS: {len(grouped)} ONLINES  -  {over_limit} ULTRAPASSARAM")
+    print("[Enter] para continuar")
+    return sessions
 
 
 def xray_inbounds():

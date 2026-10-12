@@ -582,3 +582,38 @@ class SSHPlusStyleUserListTest(unittest.TestCase):
                   cli.dt.timedelta(days=4)).isoformat()
         self.assertEqual(cli._expiry_remaining_label(expiry), "4 DIAS")
         self.assertEqual(cli._expiry_remaining_label(""), "ILIMITADO")
+
+
+
+class SSHPlusOnlineReportTest(unittest.TestCase):
+    def test_online_report_matches_sshplus_columns_and_aggregates_sessions(self):
+        sessions = [
+            {"login": "adela4", "limite": 7, "tempo_online": "1h38m43s"},
+            {"login": "adela4", "limite": 7, "tempo_online": "1h12m00s"},
+            {"login": "zulmaja", "limite": 7, "tempo_online": "1h53m21s"},
+        ]
+        with patch.object(cli, "request", return_value=sessions), \
+                patch.object(cli, "terminal_columns", return_value=80):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cli.user_report()
+        rendered = out.getvalue()
+        self.assertIn("USUARIO", rendered)
+        self.assertIn("LIMITE", rendered)
+        self.assertIn("CONEXAO", rendered)
+        self.assertIn("TEMPO", rendered)
+        self.assertIn("adela4", rendered)
+        self.assertIn("1:38:43", rendered)
+        self.assertIn("USUARIOS: 2 ONLINES  -  0 ULTRAPASSARAM", rendered)
+        self.assertNotIn("Consumo", rendered)
+
+    def test_online_report_empty_state(self):
+        with patch.object(cli, "request", return_value=[]):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cli.user_report()
+        self.assertIn("Nenhum usuário SSH conectado", out.getvalue())
+
+    def test_online_duration_parses_go_duration(self):
+        self.assertEqual(cli._online_duration("1h38m43s"), "1:38:43")
+        self.assertEqual(cli._online_duration("14m14s"), "0:14:14")
