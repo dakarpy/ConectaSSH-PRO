@@ -473,14 +473,13 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """Lista usuarios con usuario, contraseña disponible, límite, duración y consumo."""
+    """Lista cada usuario en formato vertical, legible en terminales móviles."""
     users = sorted(request("GET", "/api/users") or [],
                    key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
     line_width = max(20, cols - 2)
     separator = "━" * line_width
-    print("USUARIO CLAVE/CONTRASEÑA LIMITE DURACIÓN/VENCE CONSUMO" if cols >= 72 else
-          "USUARIO | CLAVE/CONTRASEÑA")
+    print("LISTADO DE USUARIOS SSH")
     print(separator)
     for u in users:
         username = str(u.get("username", ""))
@@ -489,24 +488,14 @@ def list_users():
         limit = str(u.get("max_connections", 0))
         duration = _expiry_remaining_label(u.get("expires_at"))
         consumption = size(u.get("total_bytes", 0))
-        if cols < 60:
-            print(f"{username[:max(6, min(16, cols // 2))]} | {password[:10]}"[:line_width])
-            print(f"LIMITE: {limit} | DURACIÓN: {duration}"[:line_width])
-            print(f"CONSUMO: {consumption}"[:line_width])
-        elif cols < 72:
-            print(f"{username[:16]}  CONTRASEÑA: {password[:10]}"[:line_width])
-            print(f"LIMITE: {limit}  |  DURACIÓN: {duration}"[:line_width])
-            print(f"CONSUMO: {consumption}"[:line_width])
-        else:
-            row = f"{username[:14]:<16}{password[:10]:<12}{limit:>5}    {duration:<12}    {consumption:>10}"
-            print(row[:line_width])
+        print(f"USUARIO: {username[:max(8, line_width - 9)]}")
+        print(f"CLAVE/CONTRASEÑA: {password[:max(4, line_width - 18)]}"[:line_width])
+        print(f"LIMITE: {limit}")
+        print(f"DURACIÓN / VENCE: {duration}"[:line_width])
+        print(f"CONSUMO: {consumption}")
         print(separator)
     print(f"Total de usuarios: {len(users)}")
-    if cols < 60:
-        print("PAM=clave Linux; N/D=sin clave.")
-    else:
-        print("PAM = clave de Linux no recuperable desde su hash.")
-        print("N/D = no hay clave guardada en el panel.")
+    print("PAM = clave Linux no recuperable; N/D = sin clave."[:line_width])
     return users
 
 
