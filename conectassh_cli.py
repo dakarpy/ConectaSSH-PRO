@@ -780,26 +780,19 @@ def user_report():
         if candidate > _online_duration(item["duration"]):
             item["duration"] = session.get("tempo_online", session.get("duration", "0s"))
     cols = terminal_columns()
-    print("USUARIOS SSH CONECTADOS")
-    if cols < 60:
-        print(f"{'USUARIO':<13} {'LÍM':>4} {'CON':>4} {'TIEMPO':>8} {'CONSUMO':>10}")
-        print("-" * min(cols, 38))
-        for name, item in sorted(grouped.items()):
-            print(f"{name[:13]:<13} {item['limit']:>4} {item['connections']:>4} "
-                  f"{_online_duration(item['duration']):>8} {size(item['traffic']):>10}")
-            print("-" * min(cols, 38))
-    else:
-        width = min(70, cols - 2)
-        border = "━" * width
-        print("┏" + border + "┓")
-        header = f"{'USUARIO':<14}{'LIMITE':>8}{'CONEXIONES':>11}{'TIEMPO':>12}{'CONSUMO':>13}"
-        print("┃" + header[:width].ljust(width) + "┃")
-        print("┗" + border + "┛")
-        for name, item in sorted(grouped.items()):
-            row = (f"{name[:14]:<14}{item['limit']:>8}{item['connections']:>11}"
-                   f"{_online_duration(item['duration']):>12}{size(item['traffic']):>13}")
-            print("┃" + row[:width].ljust(width) + "┃")
-            print(border)
+    width = max(20, min(58, cols - 2))
+    border = "━" * width
+    print(".┏" + "━" * (width - 2) + "┓")
+    header = f"{'USUARIO':<14} {'LIMITE':>6} {'CONEXIONES':>10} {'TIEMPO':>10} {'CONSUMO':>10}"
+    print("┃" + header[:width].ljust(width) + "┃")
+    print("┗" + "━" * (width - 2) + "┛")
+    for name, item in sorted(grouped.items()):
+        duration = _online_duration(item["duration"])
+        consumption = size(item["traffic"])
+        row = (f"{name[:13]:<14} {item['limit']:>6} {item['connections']:>10}"
+               f" {duration:>10} {consumption:>10}")
+        print(row[:width])
+        print(border)
     over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
     print(f"USUARIOS: {len(grouped)} CONECTADOS  -  {over_limit} SUPERAN EL LÍMITE")
     print("[Enter] para continuar")
