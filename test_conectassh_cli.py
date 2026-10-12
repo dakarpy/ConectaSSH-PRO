@@ -489,7 +489,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertEqual(payload["tls_forwarders"], cfg["tls_forwarders"])
         self.assertEqual(payload["users"], [{"username": "keep"}])
         self.assertEqual(len(backups), 1, output.getvalue())
-        self.assertIn("TLS Tunnel/443 quedaron fuera", output.getvalue())
+        self.assertIn("TLS Tunnel/443 quedó fuera", output.getvalue())
 
     def test_auto_configure_rolls_back_when_a_service_fails(self):
         cfg = {"listen": "disabled", "extra_listen": [], "users": []}
@@ -510,9 +510,9 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertNotIn("¡Protocolos configurados y activos!", output.getvalue())
 
 
-    def test_auto_configure_only_touches_protocols_with_open_required_ports(self):
+    def test_auto_configure_enables_default_protocols_even_when_ports_start_closed(self):
         cfg = {
-            "listen": "127.0.0.1:18080", "extra_listen": [],
+            "listen": "disabled", "extra_listen": [],
             "tls_forwarders": [{"listen": "0.0.0.0:443"}],
             "bhttp": {"listen": ["0.0.0.0:8080"], "shared_ports": False},
             "hcr": {"listen": ["0.0.0.0:8880"], "target": "127.0.0.1:2222"},
@@ -520,36 +520,26 @@ class AutoConfigurePreflightTest(unittest.TestCase):
             "xray": {"enabled": False, "mode": "native"},
             "users": [{"username": "preserve"}],
         }
-        report = {"services": {"ssh": {"running": True, "listen": "0.0.0.0:8080"}, "bhttp": {"running": True, "listen": "0.0.0.0:8080"}}}
-        def sockets(port, proto):
-            return port == 8080 and proto == "tcp"
+        report = {"services": {
+            "ssh": {"running": True}, "bhttp": {"running": True},
+            "hcr": {"running": True}, "udpgw": {"running": True}, "xray": {"running": True},
+        }}
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(cli, "INSTALL_DIR", Path(temp)), \
                 patch.object(cli, "request", side_effect=[copy.deepcopy(cfg), report]) as request, \
-                patch.object(cli, "transport_port_is_listening", side_effect=sockets), \
+                patch.object(cli, "transport_port_is_listening", side_effect=[False] * 5 + [True] * 10), \
                 redirect_stdout(io.StringIO()) as output:
             cli.auto_configure()
         payload = request.call_args_list[1].args[2]
-        self.assertEqual(payload["listen"], "127.0.0.1:18080")
-        self.assertEqual(payload["extra_listen"], ["0.0.0.0:8080"])
-        self.assertEqual(payload["hcr"], cfg["hcr"])
-        self.assertEqual(payload["udpgw"], cfg["udpgw"])
-        self.assertEqual(payload["xray"], cfg["xray"])
+        self.assertEqual(payload["listen"], "0.0.0.0:80")
+        self.assertIn("0.0.0.0:8080", payload["extra_listen"])
+        self.assertEqual(payload["hcr"]["listen"], ["0.0.0.0:8880"])
+        self.assertEqual(payload["udpgw"]["listen"], "0.0.0.0:7300")
+        self.assertTrue(payload["xray"]["enabled"])
         self.assertEqual(payload["tls_forwarders"], cfg["tls_forwarders"])
         self.assertEqual(payload["users"], cfg["users"])
-        self.assertIn("UDPGW 7300/UDP: CERRADO", output.getvalue())
-        self.assertIn("Protocolos con puertos previamente abiertos configurados y verificados", output.getvalue())
-
-    def test_auto_configure_does_not_post_if_no_managed_ports_are_open(self):
-        cfg = {"listen": "127.0.0.1:18080", "extra_listen": [], "users": []}
-        with tempfile.TemporaryDirectory() as temp, \
-                patch.object(cli, "INSTALL_DIR", Path(temp)), \
-                patch.object(cli, "request", return_value=copy.deepcopy(cfg)) as request, \
-                patch.object(cli, "transport_port_is_listening", return_value=False), \
-                redirect_stdout(io.StringIO()) as output:
-            cli.auto_configure()
-        request.assert_called_once_with("GET", "/api/server/config")
-        self.assertIn("No se modificó la configuración", output.getvalue())
+        self.assertIn("WebSocket 80/TCP: CERRADO", output.getvalue())
+        self.assertIn("TLS Tunnel/443 quedó fuera", output.getvalue())
 
     def test_main_menu_auto_configure_label_is_short(self):
         self.assertEqual("AUTO CONFIGURAR", cli.main_menu_options()["11"][0])

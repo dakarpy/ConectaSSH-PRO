@@ -2950,12 +2950,13 @@ def checkuser_dual_menu():
 
 
 def auto_configure():
-    """Configure only non-TLS protocols whose required transport ports already listen."""
+    """Enable standard non-TLS protocols; the API verifies listener conflicts."""
     require_root()
     print("\n╔══════════════════════════════════════════════╗")
     print("║             AUTO CONFIGURAR                 ║")
     print("╚══════════════════════════════════════════════╝")
-    print("Solo se configurarán protocolos cuyos puertos ya estén escuchando.")
+    print("Se intentará activar los protocolos estándar en sus puertos predeterminados.")
+    print("Los puertos ocupados pueden impedir que un protocolo arranque; se verificará cada servicio.")
     print("Esta opción NO configura ni modifica TLS Tunnel/443.")
     print("SSH administrativo (22), SSH interno (2222) y usuarios no se modifican.\n")
 
@@ -2980,7 +2981,10 @@ def auto_configure():
         print("No se realizaron cambios para evitar abrir puertos por suposición.")
         return
 
-    active = {name: value is True for name, value in socket_state.items()}
+    # Closed ports are candidates to be opened by the product's own listeners.
+    # The config API validates conflicts while binding; checking only already-open
+    # sockets made a fresh installation impossible to configure from this menu.
+    active = {name: True for name in socket_state}
     plan = []
     if active["ws80"] or active["ws8080"]:
         plan.append("WebSocket")
@@ -3012,17 +3016,12 @@ def auto_configure():
         label = {"ws80": "WebSocket 80/TCP", "ws8080": "WebSocket/BHTTP 8080/TCP",
                  "hcr": "HCR 8880/TCP", "udpgw": "UDPGW 7300/UDP",
                  "xray": "Xray 10086/TCP"}[name]
-        state = "ABIERTO" if active[name] else "CERRADO"
+        state = "ABIERTO" if socket_state[name] is True else "CERRADO"
         print(f"  [{'✓' if active[name] else '○'}] {label}: {state}")
 
-    if not plan:
-        print("No hay puertos compatibles abiertos para auto-configurar.")
-        print("No se modificó la configuración.")
-        print(f"Backup conservado en: {backup_file}")
-        return
-
     updated = copy.deepcopy(original)
-    # Modificar solo los campos asociados a puertos que ya están escuchando.
+    # Enable the standard listeners; TLS/443, admin SSH/22, internal SSH/2222,
+    # and user records remain untouched.
     if active["ws80"]:
         updated["listen"] = "0.0.0.0:80"
         updated["extra_listen"] = [str(item) for item in (updated.get("extra_listen") or [])
@@ -3057,7 +3056,7 @@ def auto_configure():
         xray.setdefault("config_file", str(INSTALL_DIR / "xray_config.json"))
         updated["xray"] = xray
 
-    print("[1/3] Aplicando solo los protocolos con puerto abierto: " + ", ".join(plan))
+    print("[1/3] Aplicando protocolos estándar: " + ", ".join(plan))
     try:
         report = request("POST", "/api/server/config", updated, timeout=120) or {}
     except (CLIError, OSError, ValueError) as exc:
@@ -3114,8 +3113,8 @@ def auto_configure():
         print(f"Backup conservado en: {backup_file}")
         return
 
-    print("[3/3] Protocolos con puertos previamente abiertos configurados y verificados.")
-    print("Los puertos cerrados y TLS Tunnel/443 quedaron fuera de esta operación.")
+    print("[3/3] Protocolos estándar configurados y verificados.")
+    print("TLS Tunnel/443 quedó fuera de esta operación.")
     for warning in report.get("warnings") or []:
         print_wrapped("Advertencia: " + str(warning))
     print(f"Backup conservado en: {backup_file}")
