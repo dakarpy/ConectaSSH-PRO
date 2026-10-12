@@ -786,18 +786,22 @@ def user_report():
             item["duration"] = session.get("tempo_online", session.get("duration", "0s"))
     cols = terminal_columns()
     width = max(20, min(58, cols - 2))
-    border = "━" * width
-    print(".┏" + "━" * (width - 2) + "┓")
-    header = f"{'USUARIO':<14} {'LIMITE':>6} {'CONEXIONES':>10} {'TIEMPO':>10} {'CONSUMO':>10}"
-    print("┃" + header[:width].ljust(width) + "┃")
-    print("┗" + "━" * (width - 2) + "┛")
+    inner = width - 2
+    col_width = inner // 5
+    widths = [col_width] * 5
+    widths[-1] += inner - sum(widths)
+    labels = ("USUARIO", "LIMITE", "CONEXIONES", "TIEMPO", "CONSUMO")
+    header = "".join(label[:w].center(w) for label, w in zip(labels, widths))
+    print(".┏" + "━" * inner + "┓")
+    print("┃" + header + "┃")
+    print("┗" + "━" * inner + "┛")
     for name, item in sorted(grouped.items()):
         duration = _online_duration(item["duration"])
         consumption = size(item["traffic"])
-        row = (f"{name[:13]:<14} {item['limit']:>6} {item['connections']:>10}"
-               f" {duration:>10} {consumption:>10}")
-        print(row[:width])
-        print(border)
+        values = (name, item["limit"], item["connections"], duration, consumption)
+        row = "".join(str(value)[:w].ljust(w) for value, w in zip(values, widths))
+        print(row)
+        print("━" * width)
     over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
     print(f"USUARIOS: {len(grouped)} CONECTADOS  -  {over_limit} SUPERAN EL LÍMITE")
     print("[Enter] para continuar")
