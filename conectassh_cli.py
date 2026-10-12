@@ -2701,31 +2701,41 @@ def restore_own_backup_menu():
 
 def restore_sshplus_from_menu():
     require_root()
-    candidates = sorted(Path("/root").glob("*.vps"),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
+    # Show parser errors instead of silently skipping a backup that exists.
+    candidates = sorted(
+        [p for p in Path("/root").iterdir()
+         if p.is_file() and not p.is_symlink()
+         and p.suffix.lower() == ".vps"],
+        key=lambda p: p.stat().st_mtime, reverse=True)
     paths = []
     print("\nBUSCAR BACKUP SSHPLUS EN /root")
+    if not candidates:
+        print("No hay archivos .vps regulares directamente en /root.")
+        print("Verificá el nombre y la ruta exacta del archivo.")
+        return
     for candidate in candidates:
         try:
             summary = inspect_sshplus_backup(candidate)
-            if summary.get("ready") and summary.get("users_found") == 95:
-                paths.append(candidate)
-                print(f"[✓] {candidate.name}: 95 usuarios compatibles")
+            count = int(summary.get("users_found", 0))
+            if summary.get("ok") and count > 0:
+                print(f"[✓] {candidate.name}: {count} usuarios válidos detectados; se requieren 95 para restaurar.")
+                if summary.get("ready") and count == 95:
+                    paths.append(candidate)
             else:
-                print(f"[-] {candidate.name}: no coincide con el backup esperado de 95 usuarios")
-        except (CLIError, OSError, subprocess.SubprocessError):
-            # A .vps file that is not a compatible SSHPlus archive is ignored safely.
-            continue
+                print(f"[!] {candidate.name}: no se detectaron usuarios importables.")
+        except (CLIError, OSError, subprocess.SubprocessError) as exc:
+            print(f"[!] {candidate.name}: no se pudo analizar: {exc}")
     path = _choose_backup(paths, "BACKUPS SSHPLUS COMPATIBLES")
     if not path:
-        print("\nNo se encontró un backup SSHPlus compatible en /root.")
-        print("Copiá el archivo .vps (por ejemplo, backup.vps) a /root y volvé a entrar.")
+        print("\nNo se encontró un backup restaurable de 95 usuarios.")
+        print("El resultado anterior indica el nombre del archivo y el conteo/error real.")
+        print("No se importó ni modificó ningún usuario.")
         return
     summary = inspect_sshplus_backup(path)
     print(f"\nBackup detectado: {path.name}")
     print(f"Usuarios importables: {summary.get('users_found')}/95")
     print("Root: excluido. No se sobrescriben archivos globales de cuentas.")
-    if confirm(f"¿Restaurar únicamente esos 95 usuarios desde {path.name}?"):
+    if confirm(f"¿Restaurar los 95 usuarios válidos desde {path.name}?"):
         restore_sshplus_backup(path)
 
 
