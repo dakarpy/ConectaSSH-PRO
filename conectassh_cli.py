@@ -763,7 +763,7 @@ def user_report():
         sessions = sessions.get("users", sessions.get("sessions", []))
     if not sessions:
         print("No hay usuarios SSH conectados en este momento.")
-        print("USUARIOS: 0 CONECTADOS  -  0 EXCEDEN EL LÍMITE")
+        print("USUARIOS: 0 CONECTADOS  -  0 SUPERAN EL LÍMITE")
         return []
     # Aggregate simultaneous sessions into one row per account.
     grouped = {}
@@ -801,7 +801,7 @@ def user_report():
             print("┃" + row[:width].ljust(width) + "┃")
             print(border)
     over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
-    print(f"USUARIOS: {len(grouped)} CONECTADOS  -  {over_limit} EXCEDEN EL LÍMITE")
+    print(f"USUARIOS: {len(grouped)} CONECTADOS  -  {over_limit} SUPERAN EL LÍMITE")
     print("[Enter] para continuar")
     return sessions
 

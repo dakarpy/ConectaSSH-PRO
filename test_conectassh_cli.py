@@ -697,7 +697,7 @@ class SSHPlusOnlineReportTest(unittest.TestCase):
         self.assertIn("TIEMPO", rendered)
         self.assertIn("adela4", rendered)
         self.assertIn("1:38:43", rendered)
-        self.assertIn("USUARIOS: 2 CONECTADOS  -  0 EXCEDEN EL LÍMITE", rendered)
+        self.assertIn("USUARIOS: 2 CONECTADOS  -  0 SUPERAN EL LÍMITE", rendered)
         self.assertIn("CONSUMO", rendered)
         self.assertIn("1.5 KiB", rendered)
         self.assertIn("2.0 MiB", rendered)
