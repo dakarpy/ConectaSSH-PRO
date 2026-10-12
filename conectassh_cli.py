@@ -643,37 +643,47 @@ def create_test_user():
     print(f"📆 VENCIMIENTO: {expira}")
 
 
+def renew_user():
+    """Renew only the expiration date; leave credentials and limits unchanged."""
+    name = ask("Usuario SSH").lower()
+    u = get_user(name)
+    if not u:
+        raise CLIError("Usuario no encontrado")
+    p = user_payload(u)
+    p["expires_at"] = expiry(str(u.get("expires_at") or "")[:10])
+    request("POST", "/api/users/create", p)
+    print(f"Usuario {name} renovado. Las conexiones, cuota y contraseña se conservaron.")
+
+
 def edit_user():
     name = ask("Usuario SSH").lower()
     u = get_user(name)
     if not u:
         raise CLIError("Usuario no encontrado")
     p = user_payload(u)
-    print("1 Vencimiento   2 Conexiones   3 Ancho de banda   4 Cuota   5 Generar nueva contraseña   6 PAM")
+    print("1 Conexiones   2 Ancho de banda   3 Cuota   4 Generar nueva contraseña   5 PAM")
     choice = ask("Opción")
     if choice == "1":
-        p["expires_at"] = expiry(str(u.get("expires_at") or "")[:10])
-    elif choice == "2":
         p["max_connections"] = number("Máximo de conexiones", u.get("max_connections", 1), 0, 10000)
-    elif choice == "3":
+    elif choice == "2":
         p["limit_mbps_up"] = number("Subida Mbps (0 = predeterminado)", u.get("limit_mbps_up", 0))
         p["limit_mbps_down"] = number("Bajada Mbps (0 = predeterminado)", u.get("limit_mbps_down", 0))
-    elif choice == "4":
+    elif choice == "3":
         gib = number("Cuota GiB (0 = ilimitada)", round(u.get("data_quota_bytes", 0) / 1024**3))
         p["data_quota_bytes"] = gib * 1024**3
         p["quota_action"] = ask("Al alcanzar la cuota: limitar/bloquear", u.get("quota_action") or "throttle")
         p["quota_throttle_mbps"] = number("Velocidad limitada en Mbps", u.get("quota_throttle_mbps") or 10)
-    elif choice == "5":
+    elif choice == "4":
         p["password"] = f"{secrets.randbelow(1000000):06d}"
-    elif choice == "6":
+    elif choice == "5":
         p["use_pam"] = ask("¿Usar autenticación PAM? (sí/no)", "sí" if u.get("use_pam") else "no").lower() in ("sí", "si", "s", "yes", "y")
         if p["use_pam"]:
             print("Aviso: el usuario PAM debe existir como cuenta Linux válida en /etc/passwd y /etc/shadow.")
     else:
         return
     request("POST", "/api/users/create", p)
-    print("Guardado.")
-    if choice == "5":
+    print("Cambios guardados.")
+    if choice == "4":
         print("Contraseña SSH generada:", p["password"])
 
 
@@ -2605,14 +2615,15 @@ def ssh_menu():
         "1": ("Crear usuario", create_user),
         "2": ("Crear prueba", create_test_user),
         "3": ("Remover usuario", delete_user),
-        "4": ("Renovar / editar usuario", edit_user),
-        "5": ("Usuarios online", user_report),
-        "6": ("Relatorio usuarios", user_report),
-        "7": ("Remover expirados", delete_expired_users),
-        "8": ("Listar usuarios", list_users),
-        "9": ("Restablecer tráfico", reset_traffic),
-        "10": (f"USUARIO PAM: {pam_state}", pam_auth_menu),
-        "11": (f"LIMITAR SSH: {limit_state}", ssh_connection_limit_toggle),
+        "4": ("Renovar usuario", renew_user),
+        "5": ("Editar usuario", edit_user),
+        "6": ("Usuarios online", user_report),
+        "7": ("Relatorio usuarios", user_report),
+        "8": ("Remover expirados", delete_expired_users),
+        "9": ("Listar usuarios", list_users),
+        "10": ("Restablecer tráfico", reset_traffic),
+        "11": (f"USUARIO PAM: {pam_state}", pam_auth_menu),
+        "12": (f"LIMITAR SSH: {limit_state}", ssh_connection_limit_toggle),
     }, two_columns=True)
 
 
