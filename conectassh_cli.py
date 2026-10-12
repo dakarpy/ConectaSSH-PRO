@@ -2925,6 +2925,7 @@ def config_menu():
         "11": ("ACTUALIZACIÓN DEL PANEL", update_menu),
         "12": ("CHECKUSER DUAL", checkuser_dual_menu),
         "13": ("DESINSTALAR SCRIPT", uninstall_script),
+        "14": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
     }, force_single=True, force_one_page=True)
 
 
@@ -3128,7 +3129,6 @@ def main_menu_options():
         "4": ("MODO DE CONEXIÓN", server_settings_menu),
         "5": ("BOT DE TELEGRAM", bot_settings_menu),
         "6": ("BACKUP DE USUARIOS", user_backup_menu),
-        "7": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
         "8": ("OPTIMIZAR", optimize_vps),
         "9": ("CONFIGURACIÓN", config_menu),
         "10": ("BANNER SSH", banner_menu),

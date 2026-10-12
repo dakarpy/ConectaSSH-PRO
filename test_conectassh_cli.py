@@ -260,6 +260,8 @@ class TokenManagementTest(unittest.TestCase):
             self.assertIs(config["4"][1], cli.multi_protocol_menu)
             self.assertIs(config["5"][1], cli.xray_settings_menu)
             self.assertIs(config["6"][1], cli.bot_settings_menu)
+            self.assertIs(config["14"][1], cli.online_bridge_menu)
+            self.assertNotIn("MÓDULO ONLINE WEB PRO", [label for label, _ in cli.main_menu_options().values()])
             cli.connection_menu()
             self.assertIs(open_menu.call_args.args[1]["3"][1], cli.protocol_stats)
             cli.xray_menu()
