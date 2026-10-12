@@ -473,17 +473,21 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """Lista usuarios en tabla compacta estilo SSHPlus, adaptada a móviles."""
+    """Lista usuarios en columnas de ancho uniforme, adaptadas a terminales móviles."""
     users = sorted(request("GET", "/api/users") or [],
                    key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
+    # Five equally sized columns keep each heading centered over its values.
     width = max(20, min(58, cols - 2))
-    border = "━" * width
-    # Widths are compact and fixed so the table remains readable on a phone.
-    print(".┏" + "━" * (width - 2) + "┓")
-    header = f"{'USUARIO':<14}{'CLAVE':<13}{'LIMITE':>7}{'VENCE':>11}{'CONSUMO':>11}"
-    print("┃" + header[:width].ljust(width) + "┃")
-    print("┗" + "━" * (width - 2) + "┛")
+    inner = width - 2
+    col_width = inner // 5
+    widths = [col_width] * 5
+    widths[-1] += inner - sum(widths)
+    labels = ("USUARIO", "CLAVE", "LIMITE", "VENCE", "CONSUMO")
+    header = "".join(label[:w].center(w) for label, w in zip(labels, widths))
+    print(".┏" + "━" * inner + "┓")
+    print("┃" + header + "┃")
+    print("┗" + "━" * inner + "┛")
     for u in users:
         username = str(u.get("username", ""))
         # PAM uses the Linux system password; its one-way hash cannot be reversed.
@@ -491,9 +495,10 @@ def list_users():
         limit = str(u.get("max_connections", 0))
         duration = _expiry_remaining_label(u.get("expires_at"))
         consumption = size(u.get("total_bytes", 0)).replace(" ", "")
-        row = f"{username[:13]:<14}{password[:12]:<13}{limit:>7}{duration:>11}{consumption:>11}"
-        print(row[:width])
-        print(border)
+        values = (username, password, limit, duration, consumption)
+        row = "".join(str(value)[:w].ljust(w) for value, w in zip(values, widths))
+        print(row)
+        print("━" * width)
     print(f"Total de usuarios: {len(users)}")
     print("PAM = clave Linux no recuperable; N/D = sin clave."[:width])
     return users
