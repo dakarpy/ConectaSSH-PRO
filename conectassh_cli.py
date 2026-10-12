@@ -473,13 +473,14 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """Compact SSHPlus-style rows that adapt to narrow/zoomed mobile terminals."""
+    """Lista SSH en español, con columnas separadas y consumo acumulado."""
     users = sorted(request("GET", "/api/users") or [],
                    key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
     line_width = max(20, cols - 2)
     separator = "━" * line_width
-    print("USUARIO       SENHA       LIMITE   EXPIRACAO" if cols >= 60 else "USUARIO | SENHA")
+    print("USUARIO       CLAVE       LIMITE   VENCE       CONSUMO" if cols >= 72 else
+          "USUARIO | CLAVE")
     print(separator)
     for u in users:
         username = str(u.get("username", ""))
@@ -487,23 +488,27 @@ def list_users():
         password = str(u.get("password") or ("PAM" if u.get("use_pam") else "N/D"))
         limit = str(u.get("max_connections", 0))
         expiry = _expiry_remaining_label(u.get("expires_at"))
+        consumption = size(u.get("total_bytes", 0))
         if cols < 60:
-            # Two short lines avoid horizontal wrapping when a phone is zoomed in.
-            first = f"{username[:max(6, min(16, cols // 2))]} | {password[:10]}"
-            second = f"Lim: {limit} | {expiry}"
-            print(first[:line_width])
-            print(second[:line_width])
+            print(f"{username[:max(6, min(16, cols // 2))]} | {password[:10]}"[:line_width])
+            print(f"Límite: {limit} | Vence: {expiry}"[:line_width])
+            print(f"Consumo: {consumption}"[:line_width])
+        elif cols < 72:
+            # Tres líneas de datos para que el consumo y el vencimiento no se peguen.
+            print(f"{username[:16]}  Clave: {password[:10]}"[:line_width])
+            print(f"Límite: {limit}  |  Vence: {expiry}"[:line_width])
+            print(f"Consumo: {consumption}"[:line_width])
         else:
-            # No vertical box edges: zooming/wrapping cannot cut an enclosing frame.
-            row = f"{username[:14]:<15}{password[:10]:<12}{limit:>5}   {expiry}"
+            # Columnas espaciadas; sin bordes verticales que se corten con el zoom.
+            row = f"{username[:14]:<16}{password[:10]:<12}{limit:>5}    {expiry:<12}    {consumption:>10}"
             print(row[:line_width])
         print(separator)
     print(f"Total de usuarios: {len(users)}")
     if cols < 60:
-        print("PAM=clave Linux; N/D=sin clave panel.")
+        print("PAM=clave Linux; N/D=sin clave.")
     else:
-        print("PAM = clave de Linux; no se puede recuperar del hash.")
-        print("N/D = no hay contraseña guardada en el panel.")
+        print("PAM = clave de Linux no recuperable desde su hash.")
+        print("N/D = no hay clave guardada en el panel.")
     return users
 
 
@@ -742,7 +747,7 @@ def user_report():
         sessions = sessions.get("users", sessions.get("sessions", []))
     if not sessions:
         print("Nenhum usuário SSH conectado no momento.")
-        print("USUARIOS: 0 ONLINES  -  0 ULTRAPASSARAM")
+        print("USUARIOS: 0 CONECTADOS  -  0 EXCEDIDOS")
         return []
     # Aggregate simultaneous sessions into one row per account.
     grouped = {}
@@ -759,9 +764,9 @@ def user_report():
         if candidate > _online_duration(item["duration"]):
             item["duration"] = session.get("tempo_online", session.get("duration", "0s"))
     cols = terminal_columns()
-    print("Welcome to SSH users online" if cols < 60 else "USUARIOS SSH CONECTADOS")
+    print("USUARIOS SSH CONECTADOS")
     if cols < 60:
-        print(f"{'USUARIO':<13} {'LIM':>4} {'CON':>4} {'TEMPO':>8} {'CONSUMO':>10}")
+        print(f"{'USUARIO':<13} {'LÍM':>4} {'CON':>4} {'TIEMPO':>8} {'CONSUMO':>10}")
         print("-" * min(cols, 38))
         for name, item in sorted(grouped.items()):
             print(f"{name[:13]:<13} {item['limit']:>4} {item['connections']:>4} "
@@ -771,7 +776,7 @@ def user_report():
         width = min(70, cols - 2)
         border = "━" * width
         print("┏" + border + "┓")
-        header = f"{'USUARIO':<14}{'LIMITE':>8}{'CONEXAO':>11}{'TEMPO':>12}{'CONSUMO':>13}"
+        header = f"{'USUARIO':<14}{'LIMITE':>8}{'CONEXIONES':>11}{'TIEMPO':>12}{'CONSUMO':>13}"
         print("┃" + header[:width].ljust(width) + "┃")
         print("┗" + border + "┛")
         for name, item in sorted(grouped.items()):
@@ -780,7 +785,7 @@ def user_report():
             print("┃" + row[:width].ljust(width) + "┃")
             print(border)
     over_limit = sum(1 for item in grouped.values() if item["connections"] > item["limit"])
-    print(f"USUARIOS: {len(grouped)} ONLINES  -  {over_limit} ULTRAPASSARAM")
+    print(f"USUARIOS: {len(grouped)} CONECTADOS  -  {over_limit} EXCEDIDOS")
     print("[Enter] para continuar")
     return sessions
 
@@ -2632,7 +2637,7 @@ def ssh_menu():
         "4": ("Renovar usuario", renew_user),
         "5": ("Editar usuario", edit_user),
         "6": ("Usuarios online", user_report),
-        "7": ("Relatorio usuarios", user_report),
+        "7": ("Informe de usuarios", user_report),
         "8": ("Remover expirados", delete_expired_users),
         "9": ("Listar usuarios", list_users),
         "10": ("Restablecer tráfico", reset_traffic),
