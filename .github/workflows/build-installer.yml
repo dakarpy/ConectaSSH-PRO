@@ -1,0 +1,44 @@
+name: Build ConectaSSH-PRO installer binaries
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go tests
+        run: go test ./...
+      - name: Python regression tests
+        run: python3 -m unittest -q test_lifecycle_safety test_ssh_login_safety test_conectassh_cli
+      - name: Shell syntax checks
+        run: bash -n install.sh update.sh uninstall.sh
+      - name: Build Linux amd64 and arm64 single-binary installers
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/conecta-ssh-pro-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/conecta-ssh-pro-linux-arm64 .
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: conecta-ssh-pro-installer-${{ github.sha }}
+          path: dist/conecta-ssh-pro-linux-*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish GitHub release assets for version tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/conecta-ssh-pro-linux-amd64 dist/conecta-ssh-pro-linux-arm64 --title "ConectaSSH-PRO $GITHUB_REF_NAME" --generate-notes
