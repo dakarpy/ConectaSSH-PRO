@@ -3379,6 +3379,7 @@ def main_menu_options():
         "10": ("BANNER SSH", banner_menu),
         "11": ("AUTO CONFIGURAR", auto_configure),
         "12": ("CHECKUSER DUAL", checkuser_dual_menu),
+        "13": ("ACTUALIZAR", update_menu),
     }
 
 
