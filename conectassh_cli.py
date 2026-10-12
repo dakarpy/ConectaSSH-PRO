@@ -473,34 +473,32 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """Lista SSH en español, con columnas separadas y consumo acumulado."""
+    """Lista usuarios con usuario, contraseña disponible, límite, duración y consumo."""
     users = sorted(request("GET", "/api/users") or [],
                    key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
     line_width = max(20, cols - 2)
     separator = "━" * line_width
-    print("USUARIO       CLAVE       LIMITE   VENCE       CONSUMO" if cols >= 72 else
-          "USUARIO | CLAVE")
+    print("USUARIO CLAVE/CONTRASEÑA LIMITE DURACIÓN/VENCE CONSUMO" if cols >= 72 else
+          "USUARIO | CLAVE/CONTRASEÑA")
     print(separator)
     for u in users:
         username = str(u.get("username", ""))
         # PAM uses the Linux system password; its one-way hash cannot be reversed.
         password = str(u.get("password") or ("PAM" if u.get("use_pam") else "N/D"))
         limit = str(u.get("max_connections", 0))
-        expiry = _expiry_remaining_label(u.get("expires_at"))
+        duration = _expiry_remaining_label(u.get("expires_at"))
         consumption = size(u.get("total_bytes", 0))
         if cols < 60:
             print(f"{username[:max(6, min(16, cols // 2))]} | {password[:10]}"[:line_width])
-            print(f"Límite: {limit} | Vence: {expiry}"[:line_width])
-            print(f"Consumo: {consumption}"[:line_width])
+            print(f"LIMITE: {limit} | DURACIÓN: {duration}"[:line_width])
+            print(f"CONSUMO: {consumption}"[:line_width])
         elif cols < 72:
-            # Tres líneas de datos para que el consumo y el vencimiento no se peguen.
-            print(f"{username[:16]}  Clave: {password[:10]}"[:line_width])
-            print(f"Límite: {limit}  |  Vence: {expiry}"[:line_width])
-            print(f"Consumo: {consumption}"[:line_width])
+            print(f"{username[:16]}  CONTRASEÑA: {password[:10]}"[:line_width])
+            print(f"LIMITE: {limit}  |  DURACIÓN: {duration}"[:line_width])
+            print(f"CONSUMO: {consumption}"[:line_width])
         else:
-            # Columnas espaciadas; sin bordes verticales que se corten con el zoom.
-            row = f"{username[:14]:<16}{password[:10]:<12}{limit:>5}    {expiry:<12}    {consumption:>10}"
+            row = f"{username[:14]:<16}{password[:10]:<12}{limit:>5}    {duration:<12}    {consumption:>10}"
             print(row[:line_width])
         print(separator)
     print(f"Total de usuarios: {len(users)}")
