@@ -149,7 +149,8 @@ class TokenManagementTest(unittest.TestCase):
         self.assertIn("Xray: 3 conectados", header)
         self.assertIn("18.50 Mbps", header)
         self.assertEqual(len({len(row) for row in header.splitlines()}), 1)
-        with patch.object(cli, "request", return_value={}):
+        with patch.object(cli, "request", return_value={}), \
+                patch.object(cli.os, "cpu_count", return_value=2):
             menu_text = cli.render_menu(
                 "MAIN MENU", cli.main_menu_options(), status
             )
