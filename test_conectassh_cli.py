@@ -182,6 +182,21 @@ class TokenManagementTest(unittest.TestCase):
         self.assertEqual(ask.call_count, 3)
         self.assertEqual(output.getvalue().count("\033[2J\033[H"), 3)
 
+    def test_main_menu_does_not_clear_and_redraw_while_waiting(self):
+        output = io.StringIO()
+        status = {"cpu": 1.0, "mem_total": 1024**3, "mem_used": 128,
+                  "ssh_online": 1, "ssh_expired": 0, "ssh_total": 1,
+                  "service": "active", "load": 0.1, "host": "test",
+                  "os": "Ubuntu", "uptime": "1h", "time": "12:00",
+                  "rx_bytes": 0, "tx_bytes": 0, "cores": 2}
+        with redirect_stdout(output), patch.object(output, "isatty", return_value=True), \
+                patch.object(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
+                patch.object(cli, "collect_vps_status", return_value=status) as collect, \
+                patch("builtins.input", side_effect=["0"]):
+            cli.menu("MAIN MENU", {"1": ("Option", lambda: None)})
+        self.assertEqual(collect.call_count, 1)
+        self.assertEqual(output.getvalue().count("\033[2J\033[H"), 1)
+
     def test_menu_refreshes_dynamic_options_after_a_change(self):
         calls = []
         def options():
