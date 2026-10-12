@@ -353,6 +353,28 @@ update_online_web_pro_module() {
   local was_enabled=false
 
   [[ -f "$source_dir/main.go" && -f "$source_dir/conecta-online-bridge.service" ]] || return 0
+
+  # Repair the incorrect ownership flag written by older releases only when
+  # both the existing binary and unit match the installed product exactly.
+  if grep -qx 'OWNED_UNIT_ONLINE_BRIDGE=0' "$INSTALL_DIR/.conecta-install-manifest" &&
+     [[ -f /etc/systemd/system/conecta-online-bridge.service &&
+        ! -L /etc/systemd/system/conecta-online-bridge.service &&
+        -x "$INSTALL_DIR/online-bridge/conecta-online-bridge" ]] &&
+     cmp -s "$source_dir/conecta-online-bridge.service" /etc/systemd/system/conecta-online-bridge.service; then
+    local manifest_tmp
+    manifest_tmp="$(mktemp "$INSTALL_DIR/.conecta-install-manifest.XXXXXX")"
+    if sed 's/^OWNED_UNIT_ONLINE_BRIDGE=0$/OWNED_UNIT_ONLINE_BRIDGE=1/' "$INSTALL_DIR/.conecta-install-manifest" > "$manifest_tmp"; then
+      chmod 0600 "$manifest_tmp"
+      chown root:root "$manifest_tmp"
+      mv -f -- "$manifest_tmp" "$INSTALL_DIR/.conecta-install-manifest"
+      info "  Repaired verified legacy online-bridge ownership marker."
+    else
+      rm -f -- "$manifest_tmp"
+      warn "  Could not repair bridge ownership marker; leaving bridge untouched."
+      return 0
+    fi
+  fi
+
   grep -qx 'OWNED_UNIT_ONLINE_BRIDGE=1' "$INSTALL_DIR/.conecta-install-manifest" || { info "Bridge ownership not declared; update leaves it untouched."; return 0; }
   [[ -f /etc/systemd/system/conecta-online-bridge.service ]] || { info "Bridge unit absent; update will not create it."; return 0; }
   had_unit=true

@@ -40,6 +40,16 @@ class LifecycleSafetyTests(unittest.TestCase):
         self.assertIn("CREATE DATABASE ${DB_NAME} OWNER ${DB_USER}", INSTALL)
         self.assertIn("CREATE USER ${DB_USER} WITH PASSWORD", INSTALL)
 
+    def test_online_bridge_unit_is_registered_and_removed_transactionally(self):
+        self.assertIn('register_resource unit /etc/systemd/system/conecta-online-bridge.service', INSTALL)
+        self.assertIn('OWNED_UNIT_ONLINE_BRIDGE=${OWNED_UNIT_ONLINE_BRIDGE:-0}', INSTALL)
+        self.assertIn('ExecStart=/opt/sshpanel/online-bridge/conecta-online-bridge', INSTALL)
+        self.assertIn('unit_name="conecta-online-bridge.service"', INSTALL)
+        self.assertIn('OWNED_UNIT_ONLINE_BRIDGE="${OWNED_UNIT_ONLINE_BRIDGE:-0}"', UNINSTALL)
+        self.assertIn("cmp -s \"$source_dir/conecta-online-bridge.service\" /etc/systemd/system/conecta-online-bridge.service", UPDATE)
+        self.assertIn("Repaired verified legacy online-bridge ownership marker", UPDATE)
+        self.assertIn("grep -qx 'OWNED_UNIT_ONLINE_BRIDGE=1' \"$INSTALL_DIR/.conecta-install-manifest\"", UPDATE)
+
     def _sandbox_uninstaller(self, root):
         install_dir = root / "opt" / "sshpanel"
         systemd = root / "etc" / "systemd" / "system"

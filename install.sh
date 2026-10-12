@@ -36,6 +36,7 @@ RESOURCE_LEDGER="$STATE_DIR/resources.tsv"
 INSTALL_DIR_CREATED=0
 DB_CREATED_BY_CONECTA=0
 DB_ROLE_CREATED_BY_CONECTA=0
+OWNED_UNIT_ONLINE_BRIDGE=0
 MKDIR_BIN="$(command -v mkdir 2>/dev/null || true)"
 [[ -n "$MKDIR_BIN" ]] || MKDIR_BIN="/bin/mkdir"
 # ────────────────────────────────────────────────────────────────────────────
@@ -133,7 +134,7 @@ DB_USER=sshpanel
 DB_CREATED_BY_CONECTA=$DB_CREATED_BY_CONECTA
 DB_ROLE_CREATED_BY_CONECTA=$DB_ROLE_CREATED_BY_CONECTA
 OWNED_UNIT_SSH_PANEL=1
-OWNED_UNIT_ONLINE_BRIDGE=0
+OWNED_UNIT_ONLINE_BRIDGE=${OWNED_UNIT_ONLINE_BRIDGE:-0}
 OWNED_UNIT_DNSTT_REDIRECT=0
 OWNED_PATH_INSTALL_DIR=1
 OWNED_PATH_LOG_TMPFS=1
@@ -172,10 +173,22 @@ rollback_transaction_resources() {
       resource_path_is_allowed "$path" || { warn "Ruta fuera de allowlist en ledger: $path; rollback pendiente."; return 1; }
       case "$kind" in
         unit)
-          if [[ -f "$path" && ! -L "$path" ]] && grep -q 'WorkingDirectory=/opt/sshpanel' "$path" 2>/dev/null && grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$path" 2>/dev/null; then
-            systemctl disable --now sshpanel.service >/dev/null 2>&1 || { warn "No se pudo detener sshpanel.service; rollback pendiente y datos conservados."; return 1; }
+          local unit_name=""
+          if [[ "$path" == "/etc/systemd/system/sshpanel.service" && -f "$path" && ! -L "$path" ]] &&
+             grep -q 'WorkingDirectory=/opt/sshpanel' "$path" 2>/dev/null &&
+             grep -q 'ExecStart=/opt/sshpanel/sshpanel' "$path" 2>/dev/null; then
+            unit_name="sshpanel.service"
+          elif [[ "$path" == "/etc/systemd/system/conecta-online-bridge.service" && -f "$path" && ! -L "$path" ]] &&
+               grep -q 'ExecStart=/opt/sshpanel/online-bridge/conecta-online-bridge' "$path" 2>/dev/null; then
+            unit_name="conecta-online-bridge.service"
+          elif [[ -e "$path" || -L "$path" ]]; then
+            warn "Unidad conservada; propiedad no demostrada: $path; rollback pendiente."
+            return 1
+          fi
+          if [[ -n "$unit_name" ]]; then
+            systemctl disable --now "$unit_name" >/dev/null 2>&1 || { warn "No se pudo detener $unit_name; rollback pendiente y datos conservados."; return 1; }
             rm -f -- "$path" || { warn "No se pudo retirar la unidad propia; rollback pendiente."; return 1; }
-          elif [[ -e "$path" || -L "$path" ]]; then warn "Unidad conservada; propiedad no demostrada: $path; rollback pendiente."; return 1; fi ;;
+          fi ;;
         symlink)
           if [[ -L "$path" && "$(readlink "$path" 2>/dev/null || true)" == "$target" ]]; then
             rm -f -- "$path" || { warn "No se pudo retirar el enlace propio: $path"; return 1; }
@@ -713,6 +726,13 @@ install_online_web_pro_module() {
   [[ -f "$source_dir/main.go" ]] || error "MODULO ONLINE WEB PRO source is missing."
   [[ -f "$source_dir/conecta-online-bridge.service" ]] || error "MODULO ONLINE WEB PRO service template is missing."
 
+  # Record ownership durably before creating the unit so rollback/uninstall can
+  # remove only this exact service and never mistake it for an unrelated unit.
+  register_resource unit /etc/systemd/system/conecta-online-bridge.service
+  OWNED_UNIT_ONLINE_BRIDGE=1
+  write_transaction_manifest installing
+  sed -i 's/^OWNED_UNIT_ONLINE_BRIDGE=.*/OWNED_UNIT_ONLINE_BRIDGE=1/' "$INSTALL_DIR/.conecta-install-manifest"
+
   mkdir -p "$module_dir"
   info "  Building MODULO ONLINE WEB PRO..."
   go build -trimpath -ldflags="-s -w" -o "$tmp_bin" ./cmd/conecta-online-bridge
@@ -1148,7 +1168,7 @@ DB_USER=sshpanel
 DB_CREATED_BY_CONECTA=$DB_CREATED_BY_CONECTA
 DB_ROLE_CREATED_BY_CONECTA=$DB_ROLE_CREATED_BY_CONECTA
 OWNED_UNIT_SSH_PANEL=1
-OWNED_UNIT_ONLINE_BRIDGE=0
+OWNED_UNIT_ONLINE_BRIDGE=${OWNED_UNIT_ONLINE_BRIDGE:-0}
 OWNED_UNIT_DNSTT_REDIRECT=0
 OWNED_PATH_INSTALL_DIR=1
 OWNED_PATH_LOG_TMPFS=1
