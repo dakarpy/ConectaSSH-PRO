@@ -485,7 +485,7 @@ def list_users():
     widths[-1] += inner - sum(widths)
     labels = ("USUARIO", "CLAVE", "LIMITE", "VENCE", "CONSUMO")
     header = "".join(label[:w].center(w) for label, w in zip(labels, widths))
-    print(".┏" + "━" * inner + "┓")
+    print("┏" + "━" * inner + "┓")
     print("┃" + header + "┃")
     print("┗" + "━" * inner + "┛")
     for u in users:
@@ -792,7 +792,7 @@ def user_report():
     widths[-1] += inner - sum(widths)
     labels = ("USUARIO", "LIMITE", "CONEXIONES", "TIEMPO", "CONSUMO")
     header = "".join(label[:w].center(w) for label, w in zip(labels, widths))
-    print(".┏" + "━" * inner + "┓")
+    print("┏" + "━" * inner + "┓")
     print("┃" + header + "┃")
     print("┗" + "━" * inner + "┛")
     for name, item in sorted(grouped.items()):
