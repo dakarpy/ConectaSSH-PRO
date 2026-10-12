@@ -473,29 +473,29 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """Lista cada usuario en formato vertical, legible en terminales móviles."""
+    """Lista usuarios en tabla compacta estilo SSHPlus, adaptada a móviles."""
     users = sorted(request("GET", "/api/users") or [],
                    key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
-    line_width = max(20, cols - 2)
-    separator = "━" * line_width
-    print("LISTADO DE USUARIOS SSH")
-    print(separator)
+    width = max(20, min(58, cols - 2))
+    border = "━" * width
+    # Widths are compact and fixed so the table remains readable on a phone.
+    print(".┏" + "━" * (width - 2) + "┓")
+    header = f"{'USUARIO':<14}{'CLAVE':<13}{'LIMITE':>7}{'DURAC./VENCE':>11}{'CONSUMO':>11}"
+    print("┃" + header[:width].ljust(width) + "┃")
+    print("┗" + "━" * (width - 2) + "┛")
     for u in users:
         username = str(u.get("username", ""))
         # PAM uses the Linux system password; its one-way hash cannot be reversed.
         password = str(u.get("password") or ("PAM" if u.get("use_pam") else "N/D"))
         limit = str(u.get("max_connections", 0))
         duration = _expiry_remaining_label(u.get("expires_at"))
-        consumption = size(u.get("total_bytes", 0))
-        print(f"USUARIO: {username[:max(8, line_width - 9)]}")
-        print(f"CLAVE/CONTRASEÑA: {password[:max(4, line_width - 18)]}"[:line_width])
-        print(f"LIMITE: {limit}")
-        print(f"DURACIÓN / VENCE: {duration}"[:line_width])
-        print(f"CONSUMO: {consumption}")
-        print(separator)
+        consumption = size(u.get("total_bytes", 0)).replace(" ", "")
+        row = f"{username[:13]:<14}{password[:12]:<13}{limit:>7}{duration:>11}{consumption:>11}"
+        print(row[:width])
+        print(border)
     print(f"Total de usuarios: {len(users)}")
-    print("PAM = clave Linux no recuperable; N/D = sin clave."[:line_width])
+    print("PAM = clave Linux no recuperable; N/D = sin clave."[:width])
     return users
 
 
