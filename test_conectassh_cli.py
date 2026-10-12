@@ -606,7 +606,7 @@ class SSHPlusOnlineReportTest(unittest.TestCase):
         self.assertIn("TIEMPO", rendered)
         self.assertIn("adela4", rendered)
         self.assertIn("1:38:43", rendered)
-        self.assertIn("USUARIOS: 2 CONECTADOS  -  0 EXCEDIDOS", rendered)
+        self.assertIn("USUARIOS: 2 CONECTADOS  -  0 EXCEDEN EL LÍMITE", rendered)
         self.assertIn("CONSUMO", rendered)
         self.assertIn("1.5 KiB", rendered)
         self.assertIn("2.0 MiB", rendered)
@@ -616,7 +616,7 @@ class SSHPlusOnlineReportTest(unittest.TestCase):
             out = io.StringIO()
             with redirect_stdout(out):
                 cli.user_report()
-        self.assertIn("Nenhum usuário SSH conectado", out.getvalue())
+        self.assertIn("No hay usuarios SSH conectados", out.getvalue())
 
     def test_online_duration_parses_go_duration(self):
         self.assertEqual(cli._online_duration("1h38m43s"), "1:38:43")
