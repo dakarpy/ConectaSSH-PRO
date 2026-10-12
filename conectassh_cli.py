@@ -2363,13 +2363,23 @@ def check_for_update():
     if not remote:
         raise CLIError("GitHub no devolvió un commit válido para main")
 
-    print("\nACTUALIZACIÓN DEL PANEL")
-    print(f"Commit instalado : {local or 'desconocido'}")
-    print(f"Commit disponible: {remote}")
+    cols = terminal_columns()
+    width = max(24, min(58, cols - 2))
+    line = "━" * width
+    print("\n┏" + line + "┓")
+    print("┃" + " ACTUALIZACIÓN DE CONECTASSH PRO".ljust(width)[:width] + "┃")
+    print("┣" + line + "┫")
+    installed_label = (local[:12] if local else "desconocido")
+    remote_label = remote[:12]
+    print("┃" + f" Instalado : {installed_label}".ljust(width)[:width] + "┃")
+    print("┃" + f" Disponible: {remote_label}".ljust(width)[:width] + "┃")
+    print("┣" + line + "┫")
     if local and local == remote:
-        print("✓ El panel ya está actualizado.")
+        print("┃" + " ✓ YA ESTÁ ACTUALIZADO".ljust(width)[:width] + "┃")
+        print("┗" + line + "┛")
         return False
-    print("⚠ Hay una nueva versión disponible.")
+    print("┃" + " ⚠ NUEVA VERSIÓN DISPONIBLE".ljust(width)[:width] + "┃")
+    print("┗" + line + "┛")
     return True
 
 
@@ -2379,7 +2389,9 @@ def update_menu():
 
     def update_now():
         if check_for_update():
-            if confirm("¿Aplicar la actualización ahora?"):
+            print("\nSe descargará la versión nueva y se ejecutará el actualizador del panel.")
+            if confirm("¿Continuar con la actualización? Escribí SI"):
+                print("\n⏳ ACTUALIZANDO CONECTASSH PRO...\n")
                 update_from_git()
 
     menu("ACTUALIZACIÓN DEL PANEL", {
@@ -2396,7 +2408,10 @@ def update_from_git():
     result = subprocess.run(["bash", str(updater)], check=False)
     if result.returncode:
         raise CLIError(f"La actualización falló (salida {result.returncode}); revisá la salida anterior")
-    print("Actualización completa. Volvé a abrir el menú para cargar la CLI actualizada.")
+    print("\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    print("┃       ✓ ACTUALIZACIÓN FINALIZADA CORRECTAMENTE     ┃")
+    print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    print("Volvé a abrir el menú para cargar la versión actualizada.")
 
 
 def render_menu(title, options, vps_status=None, columns=None, two_columns=False, status_line=None):
