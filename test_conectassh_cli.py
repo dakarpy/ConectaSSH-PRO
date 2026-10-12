@@ -556,6 +556,73 @@ class AutoConfigurePreflightTest(unittest.TestCase):
 
 
 
+class SSHUserEditActionsTest(unittest.TestCase):
+    def setUp(self):
+        self.user = {
+            "username": "cliente01", "password": "clave-vieja", "max_connections": 2,
+            "expires_at": "2099-01-01T23:59:59Z", "limit_mbps_up": 0,
+            "limit_mbps_down": 0, "data_quota_bytes": 0, "quota_action": "throttle",
+            "quota_throttle_mbps": 10, "use_pam": False,
+        }
+
+    def test_edit_limit_asks_username_then_new_limit_and_preserves_other_fields(self):
+        with patch.object(cli, "ask", return_value="cliente01") as ask, \
+                patch.object(cli, "get_user", return_value=self.user), \
+                patch.object(cli, "number", return_value=5) as number, \
+                patch.object(cli, "request") as request, \
+                redirect_stdout(io.StringIO()):
+            cli.edit_user_limit()
+        ask.assert_called_once_with("Usuario SSH")
+        number.assert_called_once_with("Máximo de conexiones", 2, 0, 10000)
+        payload = request.call_args.args[2]
+        self.assertEqual(request.call_args.args[:2], ("POST", "/api/users/create"))
+        self.assertEqual(payload["username"], "cliente01")
+        self.assertEqual(payload["max_connections"], 5)
+        self.assertEqual(payload["expires_at"], self.user["expires_at"])
+        self.assertNotIn("password", payload)  # backend preserves current password
+
+    def test_edit_password_asks_username_then_new_password_and_preserves_limit(self):
+        with patch.object(cli, "ask", side_effect=["cliente01", "nueva-clave-2026"]) as ask, \
+                patch.object(cli, "get_user", return_value=self.user), \
+                patch.object(cli, "request") as request, \
+                redirect_stdout(io.StringIO()):
+            cli.edit_user_password()
+        self.assertEqual(ask.call_args_list[0].args, ("Usuario SSH",))
+        self.assertIn("Nueva contraseña SSH", ask.call_args_list[1].args[0])
+        payload = request.call_args.args[2]
+        self.assertEqual(payload["username"], "cliente01")
+        self.assertEqual(payload["password"], "nueva-clave-2026")
+        self.assertEqual(payload["max_connections"], 2)
+        self.assertEqual(payload["expires_at"], self.user["expires_at"])
+
+    def test_edit_password_rejects_empty_password_and_pam(self):
+        with patch.object(cli, "ask", side_effect=["cliente01", ""]), \
+                patch.object(cli, "get_user", return_value=self.user), \
+                patch.object(cli, "request") as request:
+            with self.assertRaises(cli.CLIError):
+                cli.edit_user_password()
+        request.assert_not_called()
+        pam_user = dict(self.user, use_pam=True)
+        with patch.object(cli, "ask", return_value="cliente01"), \
+                patch.object(cli, "get_user", return_value=pam_user), \
+                patch.object(cli, "request") as request:
+            with self.assertRaises(cli.CLIError):
+                cli.edit_user_password()
+        request.assert_not_called()
+
+    def test_manager_keeps_requested_first_ten_options_in_exact_order(self):
+        expected = ["Crear usuario", "Crear prueba", "Eliminar usuario", "Renovar usuario",
+                    "Usuarios online", "Editar usuario", "Editar límite", "Editar contraseña",
+                    "Remover expirados", "Informe de usuarios"]
+        with patch.object(cli, "request", return_value={}), \
+                patch.object(cli, "menu") as menu:
+            cli.ssh_menu()
+        options = menu.call_args.args[1]
+        self.assertEqual([options[str(i)][0] for i in range(1, 11)], expected)
+        self.assertIs(options["7"][1], cli.edit_user_limit)
+        self.assertIs(options["8"][1], cli.edit_user_password)
+
+
 class SSHPlusStyleUserListTest(unittest.TestCase):
     def test_user_list_uses_table_and_remaining_days_not_verbose_consumption(self):
         user = {"username": "adan", "max_connections": 1,
