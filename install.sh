@@ -704,6 +704,7 @@ chmod 0600 "$INSTALL_DIR/.installed_repo_url"
 info "  Binary: $INSTALL_DIR/sshpanel"
 info "  Build commit: $BUILD_COMMIT ($BUILD_BRANCH)"
 install -m 700 "$SCRIPT_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
+install -m 700 "$SCRIPT_DIR/sshplus_backup.py" "$INSTALL_DIR/sshplus_backup.py"
 install -m 700 "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
 if [[ ( -e /usr/local/bin/conectassh || -L /usr/local/bin/conectassh ) && "$(readlink -f /usr/local/bin/conectassh 2>/dev/null || true)" != "$INSTALL_DIR/conectassh_cli.py" ]]; then error "Existe /usr/local/bin/conectassh ajeno; no se sobrescribe."; fi
 register_resource symlink /usr/local/bin/conectassh "$INSTALL_DIR/conectassh_cli.py"

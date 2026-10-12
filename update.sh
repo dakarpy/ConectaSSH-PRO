@@ -227,8 +227,8 @@ prepare_source_from_git() {
   else
     error "UPDATE_SOURCE must be git or local"
   fi
-  [[ -f "$SOURCE_DIR/go.mod" && -f "$SOURCE_DIR/conectassh_cli.py" && -f "$SOURCE_DIR/update.sh" ]] || \
-    error "Update source is missing go.mod, conectassh_cli.py, or update.sh; service was not changed"
+  [[ -f "$SOURCE_DIR/go.mod" && -f "$SOURCE_DIR/conectassh_cli.py" && -f "$SOURCE_DIR/sshplus_backup.py" && -f "$SOURCE_DIR/update.sh" ]] || \
+    error "Update source is missing go.mod, conectassh_cli.py, sshplus_backup.py, or update.sh; service was not changed"
 }
 
 cleanup_fetch() {
@@ -426,6 +426,7 @@ apply_update() {
   info "  Build metadata updated."
 
   install -m 700 "$SOURCE_DIR/conectassh_cli.py" "$INSTALL_DIR/conectassh_cli.py"
+  install -m 700 "$SOURCE_DIR/sshplus_backup.py" "$INSTALL_DIR/sshplus_backup.py"
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conectassh
   ln -sfn "$INSTALL_DIR/conectassh_cli.py" /usr/local/bin/conecta
 
