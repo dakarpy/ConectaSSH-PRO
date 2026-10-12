@@ -481,7 +481,7 @@ def list_users():
     border = "━" * width
     # Widths are compact and fixed so the table remains readable on a phone.
     print(".┏" + "━" * (width - 2) + "┓")
-    header = f"{'USUARIO':<14}{'CLAVE':<13}{'LIMITE':>7}{'DURAC./VENCE':>11}{'CONSUMO':>11}"
+    header = f"{'USUARIO':<14}{'CLAVE':<13}{'LIMITE':>7}{'VENCE':>11}{'CONSUMO':>11}"
     print("┃" + header[:width].ljust(width) + "┃")
     print("┗" + "━" * (width - 2) + "┛")
     for u in users:
