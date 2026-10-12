@@ -461,20 +461,50 @@ def render_vps_status(s, columns=None):
                       "┗" + "━" * (width + 2) + "┛"])
 
 
+def _expiry_remaining_label(value):
+    """Format expiration like SSHPlus Manager: remaining days, not ISO date."""
+    expiry = parse_expiry(value)
+    if not expiry:
+        return "ILIMITADO" if not value else "FECHA ?"
+    now = dt.datetime.now(expiry.tzinfo)
+    # Match SSHPlus's calendar-day style rather than showing timestamps.
+    days = (expiry.date() - now.date()).days
+    return f"{max(0, days)} DIAS"
+
+
 def list_users():
-    users = request("GET", "/api/users") or []
-    if terminal_columns() < 72:
-        for u in sorted(users, key=lambda row: row["username"]):
-            print_wrapped(f"{u['username']}  {u.get('active_conns', 0)}/{u.get('max_connections', 0)} conectados")
-            print_wrapped(f"Consumo {size(u.get('total_bytes', 0))}  "
-                          f"Vence {str(u.get('expires_at') or 'nunca')[:10]}", "  ")
+    users = sorted(request("GET", "/api/users") or [],
+                   key=lambda row: str(row.get("username", "")).lower())
+    cols = terminal_columns()
+    if cols < 60:
+        print("USUARIO              SENHA")
+        print("LIMITE               EXPIRACAO")
+        print("-" * min(38, cols - 2))
+        for u in users:
+            username = str(u.get("username", ""))[:20]
+            password = str(u.get("password") or "********")[:12]
+            print(f"{username:<20} {password}")
+            expiry = _expiry_remaining_label(u.get("expires_at"))
+            print(f"LIMITE {u.get('max_connections', 0):<5}  {expiry}")
+            print("-" * min(38, cols - 2))
     else:
-        print(f"{'USUARIO':<24} {'EN LÍNEA':>8} {'LÍMITE':>6} {'CONSUMO':>12}  VENCE")
-        for u in sorted(users, key=lambda row: row["username"]):
-            print(f"{u['username']:<24} {u.get('active_conns', 0):>8} "
-                  f"{u.get('max_connections', 0):>6} {size(u.get('total_bytes', 0)):>12}  "
-                  f"{str(u.get('expires_at') or 'nunca')[:10]}")
+        width = min(70, cols - 2)
+        border = "━" * width
+        print("┏" + border + "┓")
+        print("┃" + "USUARIO".ljust(15) + "SENHA".ljust(13) +
+              "LIMITE".ljust(9) + "EXPIRACAO".ljust(width - 37) + "┃")
+        print("┗" + border + "┛")
+        for u in users:
+            username = str(u.get("username", ""))[:14]
+            # The regular users API deliberately never returns plaintext passwords.
+            password = str(u.get("password") or "********")[:12]
+            limit = str(u.get("max_connections", 0))
+            expiry = _expiry_remaining_label(u.get("expires_at"))
+            row = f"{username:<15}{password:<13}{limit:<9}{expiry}"
+            print("┃" + row[:width].ljust(width) + "┃")
+            print(border)
     print(f"Total de usuarios: {len(users)}")
+    print("Nota: SENHA oculta por seguridad/API.")
     return users
 
 

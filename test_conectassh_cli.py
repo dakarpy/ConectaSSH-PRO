@@ -553,3 +553,32 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertNotIn("systemctl disable --now systemd-resolved.service", installer)
         self.assertNotIn('ufw allow 53/udp', installer)
         self.assertNotIn('nft add rule inet sshpanel_nat', installer)
+
+
+
+class SSHPlusStyleUserListTest(unittest.TestCase):
+    def test_user_list_uses_table_and_remaining_days_not_verbose_consumption(self):
+        user = {"username": "adan", "max_connections": 1,
+                "expires_at": (cli.dt.datetime.now(cli.dt.timezone.utc) +
+                               cli.dt.timedelta(days=3)).isoformat(),
+                "active_conns": 0, "total_bytes": 0}
+        with patch.object(cli, "request", return_value=[user]), \
+                patch.object(cli, "terminal_columns", return_value=80):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cli.list_users()
+        rendered = out.getvalue()
+        self.assertIn("USUARIO", rendered)
+        self.assertIn("SENHA", rendered)
+        self.assertIn("LIMITE", rendered)
+        self.assertIn("EXPIRACAO", rendered)
+        self.assertIn("adan", rendered)
+        self.assertIn("********", rendered)
+        self.assertNotIn("Consumo 0.0 B", rendered)
+        self.assertNotIn("conectados", rendered)
+
+    def test_expiry_label_matches_sshplus_days_format(self):
+        expiry = (cli.dt.datetime.now(cli.dt.timezone.utc) +
+                  cli.dt.timedelta(days=4)).isoformat()
+        self.assertEqual(cli._expiry_remaining_label(expiry), "4 DIAS")
+        self.assertEqual(cli._expiry_remaining_label(""), "ILIMITADO")
