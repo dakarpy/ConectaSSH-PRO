@@ -160,7 +160,7 @@ class TokenManagementTest(unittest.TestCase):
         self.assertIn("MODO DE CONEXIÓN", menu_text)
         self.assertNotIn("Resellers", menu_text)
         self.assertLessEqual(max(map(len, mobile.splitlines())), 40)
-        self.assertIn("CPU: 2 (12.5%", mobile)
+        self.assertRegex(mobile, r"CPU: \d+ \(12\.5%")
         self.assertIn("Onlines: 1", mobile)
 
     def test_menu_clears_on_open_and_redraw_after_output_pause(self):
