@@ -16,6 +16,26 @@ fail(){ echo "[x] $*" >&2; exit 1; }
 info(){ echo "[+] $*"; }
 warn(){ echo "[!] $*" >&2; }
 
+# Remove only the known legacy Conecta auto-menu hook. Old versions could
+# source it on every interactive SSH login and launch a CLI that uninstall
+# had already removed. Never touch any other profile hook or sshd setting.
+cleanup_auto_menu_hook() {
+  local hook="/etc/profile.d/conecta-auto-menu.sh"
+  local marker="# Managed by ConectaSSH-PRO AUTO MENU; do not edit."
+  [[ -e "$hook" || -L "$hook" ]] || return 0
+
+  if grep -Fq "$marker" "$hook" 2>/dev/null \
+    || grep -Fq '/usr/local/bin/conecta' "$hook" 2>/dev/null \
+    || { grep -Fq 'CONECTA_AUTO_MENU_RUNNING' "$hook" 2>/dev/null \
+         && grep -Fq '/opt/sshpanel/auto-menu.sh' "$hook" 2>/dev/null; }; then
+    rm -f -- "$hook" || fail "No se pudo retirar el hook AUTO MENU: $hook"
+    [[ ! -e "$hook" && ! -L "$hook" ]] || fail "El hook AUTO MENU sigue presente; se aborta para no dejar un inicio de sesión roto."
+    info "Hook AUTO MENU heredado de Conecta retirado."
+  else
+    warn "Se conserva $hook: no se pudo confirmar que pertenezca a ConectaSSH-PRO."
+  fi
+}
+
 for arg in "$@"; do
   case "$arg" in
     --purge) PURGE=true ;;
@@ -85,9 +105,13 @@ for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
     fail "Se conserva todo: no se pudo demostrar propiedad exclusiva de $unit_path."
   fi
 done
+
 if ! owned_unit_file "$SERVICE" "$OWNED_UNIT_SSH_PANEL" && systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
   fail "sshpanel.service está activo pero su unidad no está demostrablemente bajo propiedad de este manifiesto; no se mueve el directorio."
 fi
+
+# Remove a verified legacy login hook only after ownership preflight passes.
+cleanup_auto_menu_hook
 
 # Stop only the product's verified units; never ssh/sshd or any SSH user/session.
 for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
@@ -199,4 +223,6 @@ if [[ -f "$TXN_MANIFEST" && "$(stat -c '%u' "$TXN_MANIFEST" 2>/dev/null || true)
   mv -f -- "$tmp" "$TXN_MANIFEST"
   [[ -f "$STATE_DIR/resources.tsv" && ! -L "$STATE_DIR/resources.tsv" ]] && rm -f -- "$STATE_DIR/resources.tsv"
 fi
+# Final verification: a recognized stale hook must not survive the uninstall.
+cleanup_auto_menu_hook
 info "ConectaSSH-PRO desinstalado. No se modificaron OpenSSH, sshd_config, puerto 22 ni usuarios SSH."

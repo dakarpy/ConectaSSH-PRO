@@ -33,10 +33,46 @@ class SSHLoginSafetyTests(unittest.TestCase):
         self.assertNotIn('copy_optional_script "auto-menu.sh"', self.update)
         self.assertIn("remove_legacy_login_hook", self.update)
 
-    def test_uninstaller_preserves_global_legacy_hooks_without_manifest_ownership(self):
-        self.assertNotIn("cleanup_auto_menu_hook", self.uninstall)
-        self.assertIn("Global /etc/profile.d hooks are not in the ownership manifest; preserve them.", self.uninstall)
-        self.assertNotIn('rm -f -- "$hook"', self.uninstall)
+    def test_uninstaller_removes_only_recognized_legacy_auto_menu_hook(self):
+        self.assertIn('local hook="/etc/profile.d/conecta-auto-menu.sh"', self.uninstall)
+        self.assertIn("# Managed by ConectaSSH-PRO AUTO MENU; do not edit.", self.uninstall)
+        self.assertIn("grep -Fq '/usr/local/bin/conecta'", self.uninstall)
+        self.assertIn("grep -Fq 'CONECTA_AUTO_MENU_RUNNING'", self.uninstall)
+        self.assertIn('rm -f -- "$hook"', self.uninstall)
+        self.assertIn('Se conserva $hook: no se pudo confirmar', self.uninstall)
+        self.assertGreaterEqual(self.uninstall.count('cleanup_auto_menu_hook'), 3)
+
+    def _run_uninstaller_hook_cleanup(self, hook_path):
+        import re, subprocess, tempfile
+        match = re.search(r"(?ms)^cleanup_auto_menu_hook\(\) \{.*?^\}", self.uninstall)
+        self.assertIsNotNone(match, "cleanup_auto_menu_hook function must exist")
+        function = match.group(0).replace(
+            'local hook="/etc/profile.d/conecta-auto-menu.sh"',
+            f'local hook="{hook_path}"', 1)
+        script = 'set -euo pipefail\nfail(){ echo "[x] $*" >&2; exit 1; }\ninfo(){ echo "[+] $*"; }\nwarn(){ echo "[!] $*" >&2; }\n' + function + '\ncleanup_auto_menu_hook\n'
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+    def test_uninstaller_runtime_removes_known_legacy_auto_menu_hook(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            hook.write_text('#!/bin/sh\nexec /usr/local/bin/conecta\n')
+            result = self._run_uninstaller_hook_cleanup(hook)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(hook.exists())
+
+    def test_uninstaller_runtime_preserves_unrelated_profile_hook(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "conecta-auto-menu.sh"
+            content = 'export OTHER_PRODUCT_SETTING=1\n'
+            hook.write_text(content)
+            result = self._run_uninstaller_hook_cleanup(hook)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(hook.exists())
+            self.assertEqual(hook.read_text(), content)
 
     def test_updater_deploys_fixed_uninstaller(self):
         self.assertIn('copy_optional_script "uninstall.sh" 700', self.update)
