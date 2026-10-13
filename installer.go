@@ -168,9 +168,9 @@ func printInstallerReport(r installerReport) {
 	}
 	fmt.Println("\n[2/3] Verificando puertos...")
 	labels := map[int]string{
-		80:    "SSH WebSocket / BHTTP",
+		80:    "SSH PROXY / BHTTP",
 		443:   "TLS TUNNEL",
-		8080:  "SSH WebSocket / BHTTP",
+		8080:  "SSH PROXY / BHTTP",
 		7300:  "UDPGW",
 		8880:  "HCR",
 		10086: "XRAY nativo",

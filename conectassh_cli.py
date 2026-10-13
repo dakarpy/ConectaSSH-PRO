@@ -64,7 +64,7 @@ def colorize_menu(lines):
             continue
 
         if "SCRIPT CONECTA SSH -" in raw:
-            # El indicador de estado del submenú WebSocket conserva su color semántico.
+            # El indicador de estado del submenú PROXY conserva su color semántico.
             title = re.sub(r"ESTADO ACTUAL: \(ON\)", lambda m: "ESTADO ACTUAL: " + paint("(ON)", GREEN, True), raw)
             title = re.sub(r"ESTADO ACTUAL: \(OFF\)", lambda m: "ESTADO ACTUAL: " + paint("(OFF)", RED, True), title)
             title = re.sub(r"ESTADO ACTUAL: \(WARN\)", lambda m: "ESTADO ACTUAL: " + paint("(WARN)", YELLOW, True), title)
@@ -1071,8 +1071,8 @@ def field_menu(title, path, fields, parent_keys=()):
 
 
 SSH_FIELDS = (
-    ("listen", "WEBSOCKET SSH PRINCIPAL", "text"),
-    ("extra_listen", "WEBSOCKET SSH SECUNDARIO", "list"),
+    ("listen", "PROXY SSH PRINCIPAL", "text"),
+    ("extra_listen", "PROXY SSH SECUNDARIO", "list"),
     ("local_ssh_listen", "PUERTO SSH LOCAL/INTERNO", "text"),
     ("host_key_file", "Archivo de clave del host SSH", "text"),
     ("banner", "Texto del banner SSH", "text"),
@@ -1496,7 +1496,7 @@ def websocket_port80_deactivate():
             print("ADVERTENCIA: listener(s) TCP todavía abiertos: " + ", ".join(map(str, open_ports)))
             print("La configuración no los administra actualmente; no se detuvo ningún proceso externo.")
         else:
-            print("Los puertos WebSocket 80 y 8080 ya están desactivados.")
+            print("Los puertos PROXY 80 y 8080 ya están desactivados.")
         return
     if main_is_80:
         # Recovery binary does not support listen='disabled'; this loopback endpoint
@@ -1518,7 +1518,7 @@ def websocket_port80_deactivate():
         print("ADVERTENCIA: la configuración quitó 80/8080, pero siguen escuchando: " + ", ".join(map(str, open_ports)))
         print("No se detuvieron procesos externos. Revisá con ss -ltnp.")
         return
-    print("Puertos WebSocket 80 y 8080 desactivados y verificados.")
+    print("Puertos PROXY 80 y 8080 desactivados y verificados.")
     print("SSH 22 y 2222 no se modificaron. El listener principal local se conserva en 127.0.0.1:18080.")
 
 
@@ -1631,13 +1631,13 @@ def websocket_menu_options():
 
 
 def websocket_menu():
-    menu("WEBSOCKET", websocket_menu_options,
+    menu("PROXY", websocket_menu_options,
          force_single=True, force_one_page=True, status_line=websocket_menu_status_line)
 
 
 def server_settings_menu():
     options = {
-        "1": ("WEBSOCKET", websocket_menu),
+        "1": ("PROXY", websocket_menu),
         "2": ("TLS TUNNEL", tls_listener_menu),
         "3": ("DNSTT", lambda: block_menu("dnstt")),
         "4": ("BHTTP", lambda: block_menu("bhttp")),
@@ -1671,7 +1671,7 @@ def server_settings_menu():
         tls = cfg.get("tls_forwarders") or []
         websocket_ports = websocket_public_ports_display(cfg)
         blocks = [
-            ("WEBSOCKET", *websocket_ports),
+            ("PROXY", *websocket_ports),
             ("PUERTOS PUBLICOS", *websocket_ports),
             ("TLS TUNNEL", ", ".join(x.get("listen", "--") for x in tls) or "-", bool(tls)),
             ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
@@ -1711,7 +1711,7 @@ def server_settings_menu():
         print(paint("┣" + "━" * width + "┫", CYAN))
 
         config_entries = [
-            ("01", "WEBSOCKET"), ("02", "TLS TUNNEL"),
+            ("01", "PROXY"), ("02", "TLS TUNNEL"),
             ("03", "DNSTT"), ("04", "BHTTP"),
             ("05", "BTUN"), ("06", "HCR"),
             ("07", "UDPGW"), ("08", "SERVICIO XRAY"),
@@ -2329,7 +2329,7 @@ def connection_protocols_visual(show_return=True):
     tls = cfg.get("tls_forwarders") or []
     websocket_ports = websocket_public_ports_display(cfg)
     blocks = [
-        ("WEBSOCKET", *websocket_ports),
+        ("PROXY", *websocket_ports),
         ("PUERTOS PUBLICOS", *websocket_ports),
         ("TLS TUNNEL", ", ".join(x.get("listen", "--") for x in tls) or "-", bool(tls)),
         ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
@@ -3267,7 +3267,7 @@ def auto_configure():
     active = {name: True for name in socket_state}
     plan = []
     if active["ws80"] or active["ws8080"]:
-        plan.append("WebSocket")
+        plan.append("PROXY")
     if active["ws8080"]:
         plan.append("BHTTP (compartido en 8080)")
     if active["hcr"]:
@@ -3293,7 +3293,7 @@ def auto_configure():
     print(f"[✓] Backup: {backup_file}")
     print("Puertos detectados:")
     for name, (port, proto) in socket_checks.items():
-        label = {"ws80": "WebSocket 80/TCP", "ws8080": "WebSocket/BHTTP 8080/TCP",
+        label = {"ws80": "PROXY 80/TCP", "ws8080": "PROXY/BHTTP 8080/TCP",
                  "hcr": "HCR 8880/TCP", "udpgw": "UDPGW 7300/UDP",
                  "xray": "Xray 10086/TCP"}[name]
         state = "ABIERTO" if socket_state[name] is True else "CERRADO"
@@ -3348,7 +3348,7 @@ def auto_configure():
     services = report.get("services") or {}
     checks = []
     if active["ws80"] or active["ws8080"]:
-        checks.append(("ssh", "WebSocket SSH (puertos abiertos)"))
+        checks.append(("ssh", "PROXY SSH (puertos abiertos)"))
     if active["ws8080"]:
         checks.append(("bhttp", "BHTTP compartido (8080)"))
     if active["hcr"]:
