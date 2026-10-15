@@ -28,7 +28,7 @@ def make_backup(path, count=95, include_root=False, expired_users=None):
         passwd.append(f"{username}:x:{2000+index}:{2000+index}::/home/{username}:/bin/false")
         # Keep no expiry for this fixture; tests focus on safe selection.
         expiry = "1" if username in expired_users else ""
-        shadow.append(f"{username}:$6$hash:20000:0:99999:7:{expiry}:")
+        shadow.append(f"{username}:$6$hash:20000:0:99999:7::{expiry}:")
         members[f"etc/SSHPlus/senha/{username}"] = f"pw-{username}\n"
     members["root/usuarios.db"] = "\n".join(rows) + "\n"
     members["etc/passwd"] = "\n".join(passwd) + "\n"
