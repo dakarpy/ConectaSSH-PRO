@@ -1669,10 +1669,10 @@ def server_settings_menu():
         print(paint("┣" + "━" * width + "┫", CYAN))
 
         tls = cfg.get("tls_forwarders") or []
-        websocket_ports = proxy_public_ports_display(cfg)
+        proxy_ports = proxy_public_ports_display(cfg)
         blocks = [
-            ("PROXY", *websocket_ports),
-            ("PUERTOS PUBLICOS", *websocket_ports),
+            ("PROXY", *proxy_ports),
+            ("PUERTOS PUBLICOS", *proxy_ports),
             ("TLS TUNNEL", ", ".join(x.get("listen", "--") for x in tls) or "-", bool(tls)),
             ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
             ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
@@ -2327,10 +2327,10 @@ def connection_protocols_visual(show_return=True):
     cfg = request("GET", "/api/server/config") or {}
     def mark(enabled): return "◉" if enabled else "○"
     tls = cfg.get("tls_forwarders") or []
-    websocket_ports = proxy_public_ports_display(cfg)
+    proxy_ports = proxy_public_ports_display(cfg)
     blocks = [
-        ("PROXY", *websocket_ports),
-        ("PUERTOS PUBLICOS", *websocket_ports),
+        ("PROXY", *proxy_ports),
+        ("PUERTOS PUBLICOS", *proxy_ports),
         ("TLS TUNNEL", ", ".join(x.get("listen", "--") for x in tls) or "-", bool(tls)),
         ("BHTTP", ", ".join(map(str, (cfg.get("bhttp") or {}).get("listen") or [])) or "--", cfg.get("bhttp") is not None),
         ("HCR", ", ".join(map(str, (cfg.get("hcr") or {}).get("listen") or [])) or "--", cfg.get("hcr") is not None),
