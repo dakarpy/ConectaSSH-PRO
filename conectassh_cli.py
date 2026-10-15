@@ -741,6 +741,47 @@ def delete_expired_users():
         print(f"Se eliminaron {len(expired)} usuarios SSH vencidos.")
 
 
+
+def delete_all_users_except_root():
+    """Delete all SSH users managed by this panel, explicitly preserving root."""
+    users = request("GET", "/api/users") or []
+    usernames = sorted({
+        str(user.get("username", "")).strip().lower()
+        for user in users
+        if isinstance(user, dict)
+        and str(user.get("username", "")).strip()
+        and str(user.get("username", "")).strip().lower() != "root"
+    })
+    if not usernames:
+        print("No hay usuarios SSH para eliminar. root no será modificado.")
+        return
+
+    print("\\n⚠️  ELIMINACIÓN MASIVA DE USUARIOS SSH")
+    print(f"Se eliminarán {len(usernames)} usuarios SSH administrados por ConectaSSH-PRO.")
+    print("La cuenta root se excluye explícitamente.")
+    print("No se ejecutará userdel ni se tocarán cuentas de sistema fuera de la API del panel.")
+    typed = input('\\nEscribí exactamente "ELIMINAR TODO" para continuar: ').strip()
+    if typed != "ELIMINAR TODO":
+        print("Operación cancelada. No se eliminó ningún usuario.")
+        return
+
+    deleted = []
+    failed = []
+    for username in usernames:
+        try:
+            request("DELETE", "/api/users/delete?" + urllib.parse.urlencode({"username": username}))
+            deleted.append(username)
+        except Exception as exc:
+            failed.append((username, str(exc)))
+
+    print(f"\\nResultado: {len(deleted)} eliminados; {len(failed)} con error.")
+    print("root: PRESERVADO.")
+    if failed:
+        print("Usuarios que no se pudieron eliminar:")
+        for username, error in failed:
+            print(f"  - {username}: {error}")
+        print("No se informará éxito total mientras queden errores.")
+
 def _online_duration(value):
     """Render Go duration strings (1h38m43s) as SSHPlus H:MM:SS."""
     raw = str(value or "").strip()
@@ -3206,6 +3247,7 @@ def config_menu():
         "12": ("CHECKUSER", checkuser_dual_menu),
         "13": ("DESINSTALAR SCRIPT", uninstall_script),
         "14": ("MÓDULO ONLINE WEB PRO", online_bridge_menu),
+        "15": ("ELIMINAR TODOS LOS USUARIOS SSH (EXCEPTO ROOT)", delete_all_users_except_root),
     }, force_single=True, force_one_page=True)
 
 
