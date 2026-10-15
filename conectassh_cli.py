@@ -1413,7 +1413,7 @@ def tls_listener_show_status(cfg=None, domain=None):
     print("Nota: ON/WARN verifica el socket TCP, no un handshake TLS/SSH completo.")
 
 
-def websocket_public_ports_display(config):
+def proxy_public_ports_display(config):
     """Show public PROXY ports that are configured and listening in the kernel."""
     import ipaddress
     endpoints = [config.get("listen"), *(config.get("extra_listen") or [])]
@@ -1437,13 +1437,13 @@ def websocket_public_ports_display(config):
         if is_public:
             configured_public_ports.add(port)
     active_ports = [port for port in (80, 8080)
-                    if port in configured_public_ports and websocket_port_is_listening(port)]
+                    if port in configured_public_ports and proxy_port_is_listening(port)]
     return (", ".join(map(str, active_ports)) if active_ports else "--", bool(active_ports))
 
 
 def public_ssh_http_display(config):
     """Backward-compatible alias for the public PROXY port summary."""
-    return websocket_public_ports_display(config)
+    return proxy_public_ports_display(config)
 
 
 def compact_public_endpoint(value):
@@ -1461,16 +1461,16 @@ def _endpoint_port(value):
         return None
 
 
-def websocket_port80_status(document=None):
+def proxy_port80_status(document=None):
     document = document if document is not None else (request("GET", "/api/server/config") or {})
     main_is_80 = _endpoint_port(document.get("listen")) == 80
     extra_is_80 = any(_endpoint_port(item) == 80 for item in (document.get("extra_listen") or []))
     return main_is_80, extra_is_80
 
 
-def websocket_port80_activate():
+def proxy_port80_activate():
     document = request("GET", "/api/server/config") or {}
-    main_is_80, extra_is_80 = websocket_port80_status(document)
+    main_is_80, extra_is_80 = proxy_port80_status(document)
     if main_is_80:
         print("El puerto 80 ya está configurado como puerto principal.")
         return
@@ -1483,15 +1483,15 @@ def websocket_port80_activate():
     print("Si otro servicio ocupa el puerto, no se detendrá; revisá las advertencias anteriores.")
 
 
-def websocket_port80_deactivate():
+def proxy_port80_deactivate():
     """Disable both public PROXY ports (80 and 8080), preserving protected SSH ports."""
     document = request("GET", "/api/server/config") or {}
-    main_is_80, extra_is_80 = websocket_port80_status(document)
+    main_is_80, extra_is_80 = proxy_port80_status(document)
     extra_ports = {_endpoint_port(item) for item in (document.get("extra_listen") or [])}
     needs_change = main_is_80 or extra_is_80 or 8080 in extra_ports
     if not needs_change:
         # Still verify the kernel sockets; a stale listener must not be reported as OFF.
-        open_ports = [port for port in (80, 8080) if websocket_port_is_listening(port) is True]
+        open_ports = [port for port in (80, 8080) if proxy_port_is_listening(port) is True]
         if open_ports:
             print("ADVERTENCIA: listener(s) TCP todavía abiertos: " + ", ".join(map(str, open_ports)))
             print("La configuración no los administra actualmente; no se detuvo ningún proceso externo.")
@@ -1509,11 +1509,11 @@ def websocket_port80_deactivate():
     ]
     save_settings("/api/server/config", document)
     saved = request("GET", "/api/server/config") or {}
-    saved_main, saved_extra = websocket_port80_status(saved)
+    saved_main, saved_extra = proxy_port80_status(saved)
     saved_extra_ports = {_endpoint_port(item) for item in (saved.get("extra_listen") or [])}
     if saved_main or saved_extra or 8080 in saved_extra_ports:
         raise CLIError("El servidor no guardó la desactivación de 80/8080; revisá la configuración.")
-    open_ports = [port for port in (80, 8080) if websocket_port_is_listening(port) is True]
+    open_ports = [port for port in (80, 8080) if proxy_port_is_listening(port) is True]
     if open_ports:
         print("ADVERTENCIA: la configuración quitó 80/8080, pero siguen escuchando: " + ", ".join(map(str, open_ports)))
         print("No se detuvieron procesos externos. Revisá con ss -ltnp.")
@@ -1522,7 +1522,7 @@ def websocket_port80_deactivate():
     print("SSH 22 y 2222 no se modificaron. El listener principal local se conserva en 127.0.0.1:18080.")
 
 
-def websocket_port_is_listening(port=80):
+def proxy_port_is_listening(port=80):
     """Check the kernel TCP listen tables for a port; this does not verify a complete PROXY session."""
     target = f"{int(port):04X}"
     try:
@@ -1537,8 +1537,8 @@ def websocket_port_is_listening(port=80):
         return None
 
 
-def websocket_port80_is_listening():
-    return websocket_port_is_listening(80)
+def proxy_port80_is_listening():
+    return proxy_port_is_listening(80)
 
 
 def transport_port_is_listening(port, protocol="tcp"):
@@ -1567,12 +1567,12 @@ def transport_port_is_listening(port, protocol="tcp"):
 _PORT_STATUS_UNSET = object()
 
 
-def websocket_port80_actual_state(document=None, listening=_PORT_STATUS_UNSET):
+def proxy_port80_actual_state(document=None, listening=_PORT_STATUS_UNSET):
     """Compare configured port 80 with the actual kernel listener; never infer a working WS handshake."""
     document = document if document is not None else (request("GET", "/api/server/config") or {})
-    configured = any(websocket_port80_status(document))
+    configured = any(proxy_port80_status(document))
     if listening is _PORT_STATUS_UNSET:
-        listening = websocket_port80_is_listening()
+        listening = proxy_port80_is_listening()
     if listening is None:
         return "WARN"
     if configured and listening:
@@ -1582,10 +1582,10 @@ def websocket_port80_actual_state(document=None, listening=_PORT_STATUS_UNSET):
     return "WARN"
 
 
-def websocket_port80_show_status():
+def proxy_port80_show_status():
     document = request("GET", "/api/server/config") or {}
-    main_is_80, extra_is_80 = websocket_port80_status(document)
-    actual = websocket_port80_actual_state(document)
+    main_is_80, extra_is_80 = proxy_port80_status(document)
+    actual = proxy_port80_actual_state(document)
     if main_is_80:
         configured_status = "ACTIVO como puerto principal"
     elif extra_is_80:
@@ -1594,26 +1594,26 @@ def websocket_port80_show_status():
         configured_status = "DESACTIVADO en ConectaSSH-PRO"
     print("Estado actual del puerto 80:", f"({actual})")
     print("Configuración guardada:", configured_status)
-    print("Puerto 80 escuchando en el sistema:", "SÍ" if websocket_port80_is_listening() else "NO / NO VERIFICABLE")
+    print("Puerto 80 escuchando en el sistema:", "SÍ" if proxy_port80_is_listening() else "NO / NO VERIFICABLE")
     print("Nota: esto verifica el socket TCP; no confirma una sesión PROXY completa.")
     print("Puerto principal configurado:", document.get("listen") or "--")
     print("Puertos adicionales:", ", ".join(document.get("extra_listen") or []) or "--")
 
 
-def websocket_menu_status_line():
+def proxy_menu_status_line():
     try:
         document = request("GET", "/api/server/config") or {}
-        state = websocket_port80_actual_state(document)
+        state = proxy_port80_actual_state(document)
     except (CLIError, OSError, ValueError, json.JSONDecodeError):
         state = "WARN"
     return f"ESTADO ACTUAL: ({state})"
 
 
-def websocket_menu_options():
+def proxy_menu_options():
     """Build the live PROXY menu without changing any listener by itself."""
     try:
         document = request("GET", "/api/server/config") or {}
-        main_is_80, extra_is_80 = websocket_port80_status(document)
+        main_is_80, extra_is_80 = proxy_port80_status(document)
         if main_is_80:
             state = "CONFIGURADO · PRINCIPAL"
         elif extra_is_80:
@@ -1624,20 +1624,20 @@ def websocket_menu_options():
         state = "ESTADO NO DISPONIBLE"
     return {
         "1": ("CONFIGURACIÓN", lambda: field_menu("CONFIGURACIÓN SSH", "/api/server/config", SSH_FIELDS)),
-        "2": ("ACTIVAR PUERTO 80", websocket_port80_activate),
-        "3": ("DESACTIVAR PUERTO 80", websocket_port80_deactivate),
-        "4": ("VERIFICAR ESTADO", websocket_port80_show_status),
+        "2": ("ACTIVAR PUERTO 80", proxy_port80_activate),
+        "3": ("DESACTIVAR PUERTO 80", proxy_port80_deactivate),
+        "4": ("VERIFICAR ESTADO", proxy_port80_show_status),
     }
 
 
-def websocket_menu():
-    menu("PROXY", websocket_menu_options,
-         force_single=True, force_one_page=True, status_line=websocket_menu_status_line)
+def proxy_menu():
+    menu("PROXY", proxy_menu_options,
+         force_single=True, force_one_page=True, status_line=proxy_menu_status_line)
 
 
 def server_settings_menu():
     options = {
-        "1": ("PROXY", websocket_menu),
+        "1": ("PROXY", proxy_menu),
         "2": ("TLS TUNNEL", tls_listener_menu),
         "3": ("DNSTT", lambda: block_menu("dnstt")),
         "4": ("BHTTP", lambda: block_menu("bhttp")),
@@ -1669,7 +1669,7 @@ def server_settings_menu():
         print(paint("┣" + "━" * width + "┫", CYAN))
 
         tls = cfg.get("tls_forwarders") or []
-        websocket_ports = websocket_public_ports_display(cfg)
+        websocket_ports = proxy_public_ports_display(cfg)
         blocks = [
             ("PROXY", *websocket_ports),
             ("PUERTOS PUBLICOS", *websocket_ports),
@@ -2327,7 +2327,7 @@ def connection_protocols_visual(show_return=True):
     cfg = request("GET", "/api/server/config") or {}
     def mark(enabled): return "◉" if enabled else "○"
     tls = cfg.get("tls_forwarders") or []
-    websocket_ports = websocket_public_ports_display(cfg)
+    websocket_ports = proxy_public_ports_display(cfg)
     blocks = [
         ("PROXY", *websocket_ports),
         ("PUERTOS PUBLICOS", *websocket_ports),

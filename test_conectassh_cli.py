@@ -20,35 +20,35 @@ spec.loader.exec_module(cli)
 class PublicSSHHTTPDisplayTest(unittest.TestCase):
     def test_display_only_shows_ports_configured_public_and_actually_listening(self):
         config = {"listen": "0.0.0.0:80", "extra_listen": ["0.0.0.0:8080"]}
-        with patch.object(cli, "websocket_port_is_listening", side_effect=lambda port: port == 8080):
+        with patch.object(cli, "proxy_port_is_listening", side_effect=lambda port: port == 8080):
             self.assertEqual(cli.public_ssh_http_display(config), ("8080", True))
-        with patch.object(cli, "websocket_port_is_listening", return_value=False):
+        with patch.object(cli, "proxy_port_is_listening", return_value=False):
             self.assertEqual(cli.public_ssh_http_display(config), ("--", False))
 
     def test_loopback_listener_is_not_shown_as_public(self):
         config = {"listen": "127.0.0.1:18080", "extra_listen": []}
-        with patch.object(cli, "websocket_port_is_listening", return_value=True):
+        with patch.object(cli, "proxy_port_is_listening", return_value=True):
             self.assertEqual(cli.public_ssh_http_display(config), ("--", False))
 
     def test_display_omits_unconfigured_port_even_if_socket_exists(self):
         config = {"listen": "disabled", "extra_listen": []}
-        with patch.object(cli, "websocket_port_is_listening", return_value=True):
+        with patch.object(cli, "proxy_port_is_listening", return_value=True):
             self.assertEqual(cli.public_ssh_http_display(config), ("--", False))
 
     def test_main_menu_fits_mobile_width(self):
         config = {"listen": "disabled", "extra_listen": []}
         with patch.object(cli, "request", return_value=config), \
-                patch.object(cli, "websocket_port_is_listening", return_value=False):
+                patch.object(cli, "proxy_port_is_listening", return_value=False):
             rendered = cli.render_menu("MAIN MENU", cli.main_menu_options(), columns=40)
         self.assertLessEqual(max(map(len, rendered.splitlines())), 40)
 
 
-class WebsocketPort80MenuTest(unittest.TestCase):
+class ProxyPort80MenuTest(unittest.TestCase):
     def test_activate_port80_preserves_other_extra_listeners(self):
         config = {"listen": "0.0.0.0:443", "extra_listen": ["0.0.0.0:8080", "0.0.0.0:80"]}
         with patch.object(cli, "request", return_value=config), patch.object(cli, "save_settings") as save:
             with redirect_stdout(io.StringIO()):
-                cli.websocket_port80_activate()
+                cli.proxy_port80_activate()
         saved = save.call_args.args[1]
         self.assertEqual(saved["listen"], "0.0.0.0:80")
         self.assertEqual(saved["extra_listen"], ["0.0.0.0:8080"])
@@ -59,42 +59,42 @@ class WebsocketPort80MenuTest(unittest.TestCase):
         saved_config = {"listen": "127.0.0.1:18080", "extra_listen": []}
         with patch.object(cli, "request", side_effect=[config, saved_config]), \
                 patch.object(cli, "save_settings") as save, \
-                patch.object(cli, "websocket_port_is_listening", return_value=False):
+                patch.object(cli, "proxy_port_is_listening", return_value=False):
             with redirect_stdout(io.StringIO()):
-                cli.websocket_port80_deactivate()
+                cli.proxy_port80_deactivate()
         saved = save.call_args.args[1]
         self.assertEqual(saved["listen"], "127.0.0.1:18080")
         self.assertEqual(saved["extra_listen"], [])
 
-    def test_websocket_menu_exposes_live_status_and_manual_controls(self):
+    def test_proxy_menu_exposes_live_status_and_manual_controls(self):
         config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
         with patch.object(cli, "request", return_value=config):
-            options = cli.websocket_menu_options()
+            options = cli.proxy_menu_options()
         self.assertEqual(options["1"][0], "CONFIGURACIÓN")
         self.assertEqual(options["2"][0], "ACTIVAR PUERTO 80")
         self.assertNotIn("DESACTIVADO", options["2"][0])
         self.assertEqual(options["3"][0], "DESACTIVAR PUERTO 80")
         self.assertEqual(options["4"][0], "VERIFICAR ESTADO")
 
-    def test_websocket_menu_status_failure_does_not_hide_controls(self):
+    def test_proxy_menu_status_failure_does_not_hide_controls(self):
         with patch.object(cli, "request", side_effect=cli.CLIError("API unavailable")):
-            options = cli.websocket_menu_options()
+            options = cli.proxy_menu_options()
         self.assertEqual(options["2"][0], "ACTIVAR PUERTO 80")
         self.assertEqual(options["3"][0], "DESACTIVAR PUERTO 80")
 
     def test_actual_port_state_compares_config_and_kernel_listener(self):
         enabled = {"listen": "0.0.0.0:80", "extra_listen": []}
         disabled = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
-        self.assertEqual(cli.websocket_port80_actual_state(enabled, listening=True), "ON")
-        self.assertEqual(cli.websocket_port80_actual_state(disabled, listening=False), "OFF")
-        self.assertEqual(cli.websocket_port80_actual_state(enabled, listening=False), "WARN")
-        self.assertEqual(cli.websocket_port80_actual_state(disabled, listening=True), "WARN")
-        self.assertEqual(cli.websocket_port80_actual_state(enabled, listening=None), "WARN")
+        self.assertEqual(cli.proxy_port80_actual_state(enabled, listening=True), "ON")
+        self.assertEqual(cli.proxy_port80_actual_state(disabled, listening=False), "OFF")
+        self.assertEqual(cli.proxy_port80_actual_state(enabled, listening=False), "WARN")
+        self.assertEqual(cli.proxy_port80_actual_state(disabled, listening=True), "WARN")
+        self.assertEqual(cli.proxy_port80_actual_state(enabled, listening=None), "WARN")
 
-    def test_websocket_menu_renders_status_line_and_keeps_mobile_width(self):
+    def test_proxy_menu_renders_status_line_and_keeps_mobile_width(self):
         config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
         with patch.object(cli, "request", return_value=config):
-            rendered = cli.render_menu("PROXY SSH", cli.websocket_menu_options(),
+            rendered = cli.render_menu("PROXY SSH", cli.proxy_menu_options(),
                                        columns=40, status_line="ESTADO ACTUAL: (OFF)")
         self.assertIn("ESTADO ACTUAL: (OFF)", rendered)
         self.assertLessEqual(max(map(len, rendered.splitlines())), 40)
