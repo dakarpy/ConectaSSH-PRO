@@ -2845,11 +2845,11 @@ def inspect_sshplus_backup(path):
 def restore_sshplus_backup(path):
     # Inspect again immediately before restoring; never trust a stale menu preview.
     summary = inspect_sshplus_backup(path)
-    if not summary.get("ready") or summary.get("users_found") != 95:
-        raise CLIError(f"Restauración cancelada: se requieren exactamente 95 usuarios válidos; detectados {summary.get('users_found')}.")
+    if not summary.get("ready") or int(summary.get("users_found", 0)) <= 0:
+        raise CLIError(f"Restauración cancelada: no hay usuarios válidos para restaurar; detectados {summary.get('users_found', 0)}.")
     print("\nINSPECCIÓN DEL BACKUP SSHPLUS")
     print(f"📁 Archivo: {Path(path).name}")
-    print(f"👤 Usuarios válidos: {summary.get('users_found')}/95")
+    print(f"👤 Usuarios válidos para restaurar: {summary.get('users_found')}")
     print("🔒 Usuario root: excluido; no se modifica")
     print("🛡️ Archivos /etc/passwd, /etc/shadow, /etc/group y /etc/gshadow: no se sobrescriben")
     result = subprocess.run(["python3", "/opt/sshpanel/sshplus_backup.py", "restore", str(path)],
@@ -2906,8 +2906,8 @@ def restore_sshplus_from_menu():
             summary = inspect_sshplus_backup(candidate)
             count = int(summary.get("users_found", 0))
             if summary.get("ok") and count > 0:
-                print(f"[✓] {candidate.name}: {count} usuarios válidos detectados; se requieren 95 para restaurar.")
-                if summary.get("ready") and count == 95:
+                print(f"[✓] {candidate.name}: {count} usuarios válidos detectados; apto para restauración por lotes.")
+                if summary.get("ready") and count > 0:
                     paths.append(candidate)
             else:
                 print(f"[!] {candidate.name}: no se detectaron usuarios importables.")
@@ -2915,15 +2915,15 @@ def restore_sshplus_from_menu():
             print(f"[!] {candidate.name}: no se pudo analizar: {exc}")
     path = _choose_backup(paths, "BACKUPS SSHPLUS COMPATIBLES")
     if not path:
-        print("\nNo se encontró un backup restaurable de 95 usuarios.")
+        print("\nNo se encontró un backup SSHPlus con usuarios válidos para restaurar.")
         print("El resultado anterior indica el nombre del archivo y el conteo/error real.")
         print("No se importó ni modificó ningún usuario.")
         return
     summary = inspect_sshplus_backup(path)
     print(f"\nBackup detectado: {path.name}")
-    print(f"Usuarios importables: {summary.get('users_found')}/95")
+    print(f"Usuarios importables: {summary.get('users_found')}")
     print("Root: excluido. No se sobrescriben archivos globales de cuentas.")
-    if confirm(f"¿Restaurar los 95 usuarios válidos desde {path.name}?"):
+    if confirm(f"¿Restaurar los {summary.get('users_found')} usuarios válidos desde {path.name}?"):
         restore_sshplus_backup(path)
 
 
