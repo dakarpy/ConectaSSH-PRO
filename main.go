@@ -1866,6 +1866,7 @@ type SSHUsersBackup struct {
 	Version   int          `json:"version"`
 	CreatedAt string       `json:"created_at"`
 	Users     []UserConfig `json:"users"`
+	DeferReload bool `json:"defer_reload,omitempty"`
 }
 
 func handleBackupUsers(store *Store) http.HandlerFunc {
@@ -1934,9 +1935,12 @@ func handleRestoreUsers(store *Store) http.HandlerFunc {
 			}
 			restored++
 		}
-		reloadUsersFromDB(r.Context(), store)
+		// Batched imports defer the in-memory reload until the final batch.
+		if !backup.DeferReload {
+			reloadUsersFromDB(r.Context(), store)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"restored": restored, "total": len(backup.Users)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"restored": restored, "total": len(backup.Users), "deferred_reload": backup.DeferReload})
 	}
 }
 
