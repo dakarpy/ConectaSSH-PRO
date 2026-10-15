@@ -554,8 +554,8 @@ def list_users():
         source = u.get("_listing_source", "API")
         if source == "LINUX/PAM":
             linux_count += 1
-            username += "*"
-            password = "PAM"
+            # Keep the username exact so customers never copy a marker into login apps.
+            password = "EXTERNO"
             limit = "N/D"
             expiry = "SIN DATOS"
             consumption = "N/D"
@@ -573,8 +573,9 @@ def list_users():
     print(f"Total de usuarios visibles: {len(users)}")
     print(f"Administrados por el script/API: {api_count} | Linux/PAM externos: {linux_count}")
     if linux_count:
-        print("* = cuenta Linux/PAM externa. Plan, vencimiento, límite y consumo no disponibles en la API.")
-    print("PAM = clave Linux no recuperable; N/D = sin datos.")
+        print("EXTERNO = cuenta Linux/PAM detectada fuera de la API; el usuario se muestra sin modificar.")
+        print("Plan, vencimiento, límite y consumo de cuentas externas no disponibles en la API.")
+    print("PAM = autenticación Linux; N/D = sin datos.")
     return users
 
 def user_payload(u):
