@@ -385,9 +385,10 @@ def collect_vps_status():
             state = "unknown"
     except OSError:
         state = "unknown"
-    stats = users = xray = None
+    stats = users = xray = online_sessions = None
     for path, key in (("/api/stats", "stats"), ("/api/users", "users"),
-                      ("/api/xray/status", "xray")):
+                      ("/api/xray/status", "xray"),
+                      ("/api/online/listall.php", "online_sessions")):
         try:
             value = request("GET", path, timeout=2)
         except (CLIError, ValueError):
@@ -396,8 +397,28 @@ def collect_vps_status():
             stats = value if isinstance(value, dict) else None
         elif key == "users":
             users = value if isinstance(value, list) else None
-        else:
+        elif key == "xray":
             xray = value if isinstance(value, dict) else None
+        else:
+            if isinstance(value, dict):
+                value = value.get("users", value.get("sessions"))
+            online_sessions = value if isinstance(value, list) else None
+
+    # Count unique accounts with real SSH sessions from the existing online
+    # endpoint. This includes accounts created outside this panel, provided
+    # the endpoint reports their live sessions. Count sessions only as a
+    # fallback if the endpoint's response contains no usable usernames.
+    online_names = set()
+    online_session_count = 0
+    for session in online_sessions or []:
+        if not isinstance(session, dict):
+            continue
+        name = str(session.get("login") or session.get("username") or "").strip()
+        if name:
+            online_names.add(name.casefold())
+            online_session_count += 1
+    live_ssh_online = (len(online_names) if online_names else online_session_count) \
+        if online_sessions is not None else None
 
     try:
         load_avg = float(Path("/proc/loadavg").read_text().split()[0])
@@ -446,7 +467,10 @@ def collect_vps_status():
         "mem_total": total_mem, "mem_used": used_mem,
         "disk_pct": disk_pct,
         "ssh_total": total_visible_users if users is not None else None,
-        "ssh_online": sum(1 for u in users or [] if u.get("active_conns", 0) > 0) if users is not None else None,
+        "ssh_online": live_ssh_online if live_ssh_online is not None else (
+            sum(1 for u in users or [] if isinstance(u, dict) and u.get("active_conns", 0) > 0)
+            if users is not None else None
+        ),
         "ssh_expired": expired if users is not None else None,
         "xray_online": xray.get("online_users") if xray else None,
         "down_mbps": max((item.get("rx_mbps", 0) for item in interfaces), default=0),
