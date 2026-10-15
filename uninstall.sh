@@ -141,6 +141,7 @@ if $PURGE && [[ -f "$RECOVERY_OVERRIDE" && ! -L "$RECOVERY_OVERRIDE" ]] &&
    grep -Fq 'UnsetEnvironment=PG_DSN' "$RECOVERY_OVERRIDE"; then
   rm -f -- "$RECOVERY_OVERRIDE" || fail "No se pudo eliminar el override temporal de recuperación de Conecta."
   rmdir --ignore-fail-on-non-empty "${RECOVERY_OVERRIDE%/*}" 2>/dev/null || true
+  systemctl daemon-reload >/dev/null 2>&1 || fail "No se pudo recargar systemd después de retirar el override de recuperación."
 fi
 for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
   unit_path="/etc/systemd/system/$unit"
