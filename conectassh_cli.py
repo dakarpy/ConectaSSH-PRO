@@ -771,7 +771,7 @@ def delete_all_users_except_root():
     print(f"Se eliminarán {len(usernames)} usuarios SSH administrados por ConectaSSH-PRO.")
     print("La cuenta root se excluye explícitamente.")
     print("No se ejecutará userdel ni se tocarán cuentas de sistema fuera de la API del panel.")
-    typed = input('\nEscribí exactamente "ELIMINAR TODO" para continuar: ').strip()
+    typed = input('\\nEscribí exactamente "ELIMINAR TODO" para continuar: ').strip()
     if typed != "ELIMINAR TODO":
         print("Operación cancelada. No se eliminó ningún usuario.")
         return
