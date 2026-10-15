@@ -22,7 +22,7 @@ VALID_USER = re.compile(r'^[A-Za-z0-9._-]{1,32}$')
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 250000
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
-RESTORE_BATCH_SIZE = 200
+RESTORE_BATCH_SIZE = 1000
 
 
 def req(method, path, data=None, timeout=120):
@@ -171,6 +171,7 @@ def restore(path):
             'version': 1,
             'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
             'users': batch,
+            'defer_reload': offset + len(batch) < total_users,
         }, timeout=180)
         restored = int(result.get('restored', 0))
         total = int(result.get('total', -1))
