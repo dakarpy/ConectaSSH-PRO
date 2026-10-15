@@ -160,7 +160,7 @@ class LifecycleSafetyTests(unittest.TestCase):
             self.assertFalse(install_dir.exists())
             self.assertFalse((systemd / "sshpanel.service").exists())
             self.assertFalse((bindir / "conecta").exists())
-            self.assertIn("STATE=uninstalled", (state_dir / "manifest").read_text())
+            self.assertFalse(state_dir.exists(), "La purga debe eliminar el estado transaccional residual")
 
     def test_corrupt_install_recovery_preserves_data_and_clears_owned_cli(self):
         with tempfile.TemporaryDirectory(prefix="conecta-corrupt-recovery-") as td:
