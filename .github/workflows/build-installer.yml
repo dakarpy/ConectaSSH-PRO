@@ -22,7 +22,7 @@ jobs:
       - name: Go tests
         run: go test ./...
       - name: Python regression tests (installer lifecycle tests require root)
-        run: sudo -E python3 -m unittest -q test_lifecycle_safety test_ssh_login_safety test_conectassh_cli
+        run: sudo -E python3 -m unittest -q test_lifecycle_safety test_ssh_login_safety test_conectassh_cli test_sshplus_backup
       - name: Shell syntax checks
         run: bash -n install.sh update.sh uninstall.sh
       - name: Build Linux amd64 and arm64 single-binary installers

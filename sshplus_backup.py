@@ -18,9 +18,11 @@ import urllib.request
 BASE = Path('/opt/sshpanel')
 ROOT = Path('/root')
 VALID_USER = re.compile(r'^[A-Za-z0-9._-]{1,32}$')
-EXPECTED_USERS = 95
+# Limits protect against malformed/decompression-bomb archives, not user counts.
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 250000
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
+RESTORE_BATCH_SIZE = 1000
 
 
 def req(method, path, data=None, timeout=120):
@@ -50,8 +52,8 @@ def _archive_data(path):
         raise ValueError('Tamaño del backup fuera del rango permitido.')
     with tarfile.open(path, 'r:*') as archive:
         members = archive.getmembers()
-        if len(members) > 20000:
-            raise ValueError('El backup contiene demasiados elementos.')
+        if len(members) > MAX_ARCHIVE_ENTRIES:
+            raise ValueError('El backup supera el límite de seguridad de elementos del archivo.')
         files = {}
         for member in members:
             name = member.name.lstrip('./')
@@ -83,16 +85,26 @@ def _archive_data(path):
     shadow = text('etc/shadow', required=True)
     pass_users = {line.split(':', 1)[0] for line in passwd.splitlines() if ':' in line}
     shadow_expiry = {}
+    expired_accounts = set()
+    today = dt.datetime.now(dt.timezone.utc).date()
+    epoch = dt.date(1970, 1, 1)
+    today_day = (today - epoch).days
     for line in shadow.splitlines():
         fields = line.split(':')
-        if len(fields) >= 8 and fields[0] and fields[7].isdigit():
+        if not fields or not fields[0]:
+            continue
+        # Shadow field 8 (index 7) is the Linux account-expiration day.
+        # Empty means no account-expiration date; a past or current day is expired.
+        if len(fields) >= 8 and fields[7].isdigit():
             try:
                 day = int(fields[7])
                 shadow_expiry[fields[0]] = (
                     dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
                     + dt.timedelta(days=day)).isoformat().replace('+00:00', 'Z')
+                if day <= today_day:
+                    expired_accounts.add(fields[0])
             except (OverflowError, ValueError):
-                pass
+                expired_accounts.add(fields[0])
     rows, skipped = [], []
     seen = set()
     for line in db.splitlines():
@@ -111,6 +123,9 @@ def _archive_data(path):
         seen.add(username)
         if username not in pass_users:
             skipped.append('no_system_account')
+            continue
+        if username in expired_accounts:
+            skipped.append('expired_account')
             continue
         cred_path = 'etc/SSHPlus/senha/' + username
         raw_password = files.get(cred_path)
@@ -135,7 +150,7 @@ def _archive_data(path):
             'use_pam': False,
         })
     if not rows:
-        raise ValueError('No se encontraron usuarios importables.')
+        raise ValueError('No se encontraron usuarios activos y válidos para restaurar.')
     return rows, len(members), skipped
 
 
@@ -144,37 +159,52 @@ def inspect(path):
     # Report only counts and usernames; never print passwords or password hashes.
     print(json.dumps({
         'ok': True, 'file': Path(path).name, 'archive_entries': entries,
-        'users_found': len(users), 'expected_users': EXPECTED_USERS,
+        'users_found': len(users),
         'root_excluded': True, 'skipped_entries': len(skipped),
         'users': [{'username': u['username'], 'max_connections': u['max_connections'],
                    'expires_at': u['expires_at']} for u in users],
-        'ready': len(users) == EXPECTED_USERS and all(u['username'].lower() != 'root' for u in users),
+        'ready': len(users) > 0 and all(u['username'].lower() != 'root' for u in users),
     }, ensure_ascii=False))
 
 
 def restore(path):
     users, entries, skipped = _archive_data(path)
-    if len(users) != EXPECTED_USERS:
-        raise ValueError(f'Se esperaban exactamente {EXPECTED_USERS} usuarios válidos; se detectaron {len(users)}. No se importó nada.')
+    if not users:
+        raise ValueError('No se encontraron usuarios válidos para restaurar.')
     if any(u['username'].lower() == 'root' for u in users):
         raise ValueError('Protección root: se canceló la restauración.')
-    # API restore upserts the supplied records only; it does not replace the user table.
-    # Explicitly exclude root and leave system account files untouched.
-    result = req('POST', '/api/users/restore', {
-        'version': 1,
-        'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
-        'users': users,
-    }, timeout=180)
-    restored = int(result.get('restored', 0))
-    total = int(result.get('total', -1))
-    if restored != EXPECTED_USERS or total != EXPECTED_USERS:
-        raise RuntimeError(f'Respuesta API inesperada: restored={restored}, total={total}; revisar el panel antes de reintentar.')
+
+    # Import in small idempotent batches so large backups do not create one huge
+    # HTTP request. Upsert means a retry after an interruption is safe.
+    restored_total = 0
+    total_users = len(users)
+    for offset in range(0, total_users, RESTORE_BATCH_SIZE):
+        batch = users[offset:offset + RESTORE_BATCH_SIZE]
+        result = req('POST', '/api/users/restore', {
+            'version': 1,
+            'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'users': batch,
+            'defer_reload': offset + len(batch) < total_users,
+        }, timeout=180)
+        restored = int(result.get('restored', 0))
+        total = int(result.get('total', -1))
+        if restored != len(batch) or total != len(batch):
+            raise RuntimeError(
+                f'Respuesta API inesperada en lote {offset // RESTORE_BATCH_SIZE + 1}: '
+                f'restored={restored}, total={total}, esperado={len(batch)}. '
+                f'Progreso confirmado: {restored_total}/{total_users}. '
+                'Podés volver a ejecutar la restauración; las cuentas se actualizan por nombre.'
+            )
+        restored_total += restored
+        print(f'PROGRESO {restored_total}/{total_users}', flush=True)
+
     print('RESTORE_OK')
-    print('USUARIOS_RESTAURADOS', restored)
+    print('USUARIOS_RESTAURADOS', restored_total)
+    print('ELEMENTOS_BACKUP', entries)
+    print('USUARIOS_OMITIDOS', len(skipped))
     print('ROOT_MODIFICADO', 'NO')
     print('ARCHIVOS_DE_CUENTAS_DEL_SISTEMA_MODIFICADOS', 'NO')
     print('BACKUP_ORIGEN', Path(path).name)
-
 
 if __name__ == '__main__':
     import sys
