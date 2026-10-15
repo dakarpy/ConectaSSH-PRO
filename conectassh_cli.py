@@ -754,7 +754,7 @@ def delete_expired_users():
 
 
 def delete_all_users_except_root():
-    """Delete all SSH users managed by this panel, explicitly preserving root."""
+    """Delete panel-managed SSH users with live progress; never target root."""
     users = request("GET", "/api/users") or []
     usernames = sorted({
         str(user.get("username", "")).strip().lower()
@@ -764,29 +764,50 @@ def delete_all_users_except_root():
         and str(user.get("username", "")).strip().lower() != "root"
     })
     if not usernames:
-        print("\nNo hay usuarios SSH para eliminar. root no será modificado.")
+        print("\\nNo hay usuarios SSH para eliminar. root no será modificado.")
         return
 
-    print("\n⚠️  ELIMINACIÓN MASIVA DE USUARIOS SSH")
-    print(f"Se eliminarán {len(usernames)} usuarios SSH administrados por ConectaSSH-PRO.")
-    print("La cuenta root se excluye explícitamente.")
-    print("No se ejecutará userdel ni se tocarán cuentas de sistema fuera de la API del panel.")
+    total = len(usernames)
+    print("\\n⚠️  ELIMINACIÓN MASIVA DE USUARIOS SSH")
+    print(f"Usuarios seleccionados: {total}")
+    print("root está excluido. Solo se usará la API del panel; no se ejecutará userdel.")
     typed = input('\\nEscribí exactamente "ELIMINAR TODO" para continuar: ').strip()
     if typed != "ELIMINAR TODO":
         print("Operación cancelada. No se eliminó ningún usuario.")
         return
 
-    deleted = []
+    deleted = 0
     failed = []
-    for username in usernames:
+    started = time.monotonic()
+    print("\\nIniciando eliminación. No cierres la consola; se mostrará el avance:")
+    for index, username in enumerate(usernames, start=1):
+        elapsed = max(time.monotonic() - started, 0.001)
+        rate = (index - 1) / elapsed
+        remaining = int((total - index + 1) / rate) if rate > 0 else 0
+        print(
+            f"\\r[{index}/{total}] Procesando: {username} | "
+            f"eliminados: {deleted} | errores: {len(failed)} | "
+            f"transcurrido: {int(elapsed)}s | estimado restante: {remaining}s   ",
+            end="", flush=True,
+        )
         try:
             request("DELETE", "/api/users/delete?" + urllib.parse.urlencode({"username": username}))
-            deleted.append(username)
+            deleted += 1
         except Exception as exc:
             failed.append((username, str(exc)))
+        elapsed = max(time.monotonic() - started, 0.001)
+        rate = index / elapsed
+        remaining = int((total - index) / rate) if rate > 0 else 0
+        print(
+            f"\\r[{index}/{total}] completados | eliminados: {deleted} | "
+            f"errores: {len(failed)} | transcurrido: {int(elapsed)}s | "
+            f"estimado restante: {remaining}s   ",
+            end="", flush=True,
+        )
 
-    print(f"\nResultado: {len(deleted)} eliminados; {len(failed)} con error.")
-    print("root: PRESERVADO.")
+    elapsed = int(time.monotonic() - started)
+    print(f"\\n\\nResultado: {deleted} eliminados; {len(failed)} con error.")
+    print(f"Tiempo total: {elapsed}s. root: PRESERVADO.")
     if failed:
         print("Usuarios que no se pudieron eliminar:")
         for username, error in failed:
