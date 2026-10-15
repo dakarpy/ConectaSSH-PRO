@@ -20,6 +20,7 @@ import select
 import subprocess
 import sys
 import tempfile
+import threading
 import textwrap
 import time
 import urllib.error
@@ -754,8 +755,8 @@ def delete_expired_users():
 
 
 def delete_all_users_except_root():
-    """Delete panel-managed SSH users with live progress; never target root."""
-    users = request("GET", "/api/users") or []
+    """Delete panel-managed SSH users with heartbeat progress; never target root."""
+    users = request("GET", "/api/users", timeout=120) or []
     usernames = sorted({
         str(user.get("username", "")).strip().lower()
         for user in users
@@ -764,14 +765,14 @@ def delete_all_users_except_root():
         and str(user.get("username", "")).strip().lower() != "root"
     })
     if not usernames:
-        print("\\nNo hay usuarios SSH para eliminar. root no será modificado.")
+        print("\nNo hay usuarios SSH para eliminar. root no será modificado.")
         return
 
     total = len(usernames)
-    print("\\n⚠️  ELIMINACIÓN MASIVA DE USUARIOS SSH")
+    print("\n⚠️  ELIMINACIÓN MASIVA DE USUARIOS SSH")
     print(f"Usuarios seleccionados: {total}")
     print("root está excluido. Solo se usará la API del panel; no se ejecutará userdel.")
-    typed = input('\\nEscribí exactamente "ELIMINAR TODO" para continuar: ').strip()
+    typed = input('\nEscribí exactamente "ELIMINAR TODO" para continuar: ').strip()
     if typed != "ELIMINAR TODO":
         print("Operación cancelada. No se eliminó ningún usuario.")
         return
@@ -779,34 +780,63 @@ def delete_all_users_except_root():
     deleted = 0
     failed = []
     started = time.monotonic()
-    print("\\nIniciando eliminación. No cierres la consola; se mostrará el avance:")
+    print("\nIniciando eliminación. Mantené esta consola abierta hasta el resultado final.")
     for index, username in enumerate(usernames, start=1):
+        current_started = time.monotonic()
+        stop_heartbeat = threading.Event()
+
+        def heartbeat():
+            symbols = "|/-\\"
+            tick = 0
+            while not stop_heartbeat.wait(1.0):
+                current_elapsed = int(time.monotonic() - current_started)
+                total_elapsed = max(time.monotonic() - started, 0.001)
+                rate = deleted / total_elapsed
+                remaining = int((total - index + 1) / rate) if rate > 0 else 0
+                print(
+                    f"\r[{index}/{total}] Esperando respuesta de la API "
+                    f"{symbols[tick % len(symbols)]} | eliminados: {deleted} "
+                    f"| errores: {len(failed)} | petición: {current_elapsed}s "
+                    f"| total: {int(total_elapsed)}s | restante aprox.: {remaining}s   ",
+                    end="", flush=True,
+                )
+                tick += 1
+
+        worker = threading.Thread(target=heartbeat, daemon=True)
         elapsed = max(time.monotonic() - started, 0.001)
-        rate = (index - 1) / elapsed
+        rate = deleted / elapsed
         remaining = int((total - index + 1) / rate) if rate > 0 else 0
         print(
-            f"\\r[{index}/{total}] Procesando: {username} | "
-            f"eliminados: {deleted} | errores: {len(failed)} | "
-            f"transcurrido: {int(elapsed)}s | estimado restante: {remaining}s   ",
+            f"\r[{index}/{total}] Procesando: {username} | eliminados: {deleted} "
+            f"| errores: {len(failed)} | restante aprox.: {remaining}s   ",
             end="", flush=True,
         )
+        worker.start()
         try:
-            request("DELETE", "/api/users/delete?" + urllib.parse.urlencode({"username": username}))
+            request(
+                "DELETE",
+                "/api/users/delete?" + urllib.parse.urlencode({"username": username}),
+                timeout=30,
+            )
             deleted += 1
         except Exception as exc:
             failed.append((username, str(exc)))
+        finally:
+            stop_heartbeat.set()
+            worker.join(timeout=2)
+
         elapsed = max(time.monotonic() - started, 0.001)
-        rate = index / elapsed
+        rate = (deleted + len(failed)) / elapsed
         remaining = int((total - index) / rate) if rate > 0 else 0
         print(
-            f"\\r[{index}/{total}] completados | eliminados: {deleted} | "
-            f"errores: {len(failed)} | transcurrido: {int(elapsed)}s | "
-            f"estimado restante: {remaining}s   ",
+            f"\r[{index}/{total}] completados | eliminados: {deleted} "
+            f"| errores: {len(failed)} | transcurrido: {int(elapsed)}s "
+            f"| restante aprox.: {remaining}s   ",
             end="", flush=True,
         )
 
     elapsed = int(time.monotonic() - started)
-    print(f"\\n\\nResultado: {deleted} eliminados; {len(failed)} con error.")
+    print(f"\n\nResultado: {deleted} eliminados; {len(failed)} con error.")
     print(f"Tiempo total: {elapsed}s. root: PRESERVADO.")
     if failed:
         print("Usuarios que no se pudieron eliminar:")
