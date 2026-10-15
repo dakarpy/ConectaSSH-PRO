@@ -1414,7 +1414,7 @@ def tls_listener_show_status(cfg=None, domain=None):
 
 
 def websocket_public_ports_display(config):
-    """Show only public WebSocket ports configured AND listening in the kernel."""
+    """Show public PROXY ports that are configured and listening in the kernel."""
     import ipaddress
     endpoints = [config.get("listen"), *(config.get("extra_listen") or [])]
     configured_public_ports = set()
@@ -1442,7 +1442,7 @@ def websocket_public_ports_display(config):
 
 
 def public_ssh_http_display(config):
-    """Backward-compatible alias for the public WebSocket port summary."""
+    """Backward-compatible alias for the public PROXY port summary."""
     return websocket_public_ports_display(config)
 
 
@@ -1484,7 +1484,7 @@ def websocket_port80_activate():
 
 
 def websocket_port80_deactivate():
-    """Disable both public WebSocket ports (80 and 8080), preserving protected SSH ports."""
+    """Disable both public PROXY ports (80 and 8080), preserving protected SSH ports."""
     document = request("GET", "/api/server/config") or {}
     main_is_80, extra_is_80 = websocket_port80_status(document)
     extra_ports = {_endpoint_port(item) for item in (document.get("extra_listen") or [])}
@@ -1502,7 +1502,7 @@ def websocket_port80_deactivate():
         # Recovery binary does not support listen='disabled'; this loopback endpoint
         # prevents its fallback from reopening public port 80.
         document["listen"] = "127.0.0.1:18080"
-    # Remove both WebSocket ports from additional listeners, keeping every other port.
+    # Remove both PROXY ports from additional listeners, keeping every other port.
     document["extra_listen"] = [
         item for item in (document.get("extra_listen") or [])
         if _endpoint_port(item) not in (80, 8080)
@@ -1523,7 +1523,7 @@ def websocket_port80_deactivate():
 
 
 def websocket_port_is_listening(port=80):
-    """Check the kernel TCP listen tables for a port; this is not a WebSocket handshake."""
+    """Check the kernel TCP listen tables for a port; this does not verify a complete PROXY session."""
     target = f"{int(port):04X}"
     try:
         for path in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
@@ -1595,7 +1595,7 @@ def websocket_port80_show_status():
     print("Estado actual del puerto 80:", f"({actual})")
     print("Configuración guardada:", configured_status)
     print("Puerto 80 escuchando en el sistema:", "SÍ" if websocket_port80_is_listening() else "NO / NO VERIFICABLE")
-    print("Nota: esto verifica el socket TCP; no confirma un handshake WebSocket completo.")
+    print("Nota: esto verifica el socket TCP; no confirma una sesión PROXY completa.")
     print("Puerto principal configurado:", document.get("listen") or "--")
     print("Puertos adicionales:", ", ".join(document.get("extra_listen") or []) or "--")
 
@@ -1610,7 +1610,7 @@ def websocket_menu_status_line():
 
 
 def websocket_menu_options():
-    """Build a live WebSocket menu without changing any listener by itself."""
+    """Build the live PROXY menu without changing any listener by itself."""
     try:
         document = request("GET", "/api/server/config") or {}
         main_is_80, extra_is_80 = websocket_port80_status(document)
