@@ -523,9 +523,9 @@ def list_users():
     try:
         with open("/etc/login.defs", encoding="utf-8") as handle:
             for line in handle:
-                match = re.match(r"^\\s*UID_MIN\\s+(\\d+)", line)
-                if match:
-                    uid_min = int(match.group(1))
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "UID_MIN" and parts[1].isdigit():
+                    uid_min = int(parts[1])
                     break
     except OSError:
         pass
@@ -585,6 +585,10 @@ def list_users():
         }
 
     users = sorted(by_name.values(), key=lambda row: str(row.get("username", "")).lower())
+    if not users:
+        print("\\nNo hay usuarios SSH registrados en la API ni cuentas SSHPlus detectables en este VPS.")
+        print("No se modificó ninguna cuenta.")
+        return []
     cols = terminal_columns()
     width = max(20, min(58, cols - 2))
     inner = width - 2
