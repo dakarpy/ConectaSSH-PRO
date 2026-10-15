@@ -85,16 +85,26 @@ def _archive_data(path):
     shadow = text('etc/shadow', required=True)
     pass_users = {line.split(':', 1)[0] for line in passwd.splitlines() if ':' in line}
     shadow_expiry = {}
+    expired_accounts = set()
+    today = dt.datetime.now(dt.timezone.utc).date()
+    epoch = dt.date(1970, 1, 1)
+    today_day = (today - epoch).days
     for line in shadow.splitlines():
         fields = line.split(':')
-        if len(fields) >= 8 and fields[0] and fields[7].isdigit():
+        if not fields or not fields[0]:
+            continue
+        # Shadow field 8 (index 7) is the Linux account-expiration day.
+        # Empty means no account-expiration date; a past or current day is expired.
+        if len(fields) >= 8 and fields[7].isdigit():
             try:
                 day = int(fields[7])
                 shadow_expiry[fields[0]] = (
                     dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
                     + dt.timedelta(days=day)).isoformat().replace('+00:00', 'Z')
+                if day <= today_day:
+                    expired_accounts.add(fields[0])
             except (OverflowError, ValueError):
-                pass
+                expired_accounts.add(fields[0])
     rows, skipped = [], []
     seen = set()
     for line in db.splitlines():
@@ -113,6 +123,9 @@ def _archive_data(path):
         seen.add(username)
         if username not in pass_users:
             skipped.append('no_system_account')
+            continue
+        if username in expired_accounts:
+            skipped.append('expired_account')
             continue
         cred_path = 'etc/SSHPlus/senha/' + username
         raw_password = files.get(cred_path)
@@ -137,7 +150,7 @@ def _archive_data(path):
             'use_pam': False,
         })
     if not rows:
-        raise ValueError('No se encontraron usuarios importables.')
+        raise ValueError('No se encontraron usuarios activos y válidos para restaurar.')
     return rows, len(members), skipped
 
 
