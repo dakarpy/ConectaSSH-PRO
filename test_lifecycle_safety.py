@@ -47,8 +47,11 @@ class LifecycleSafetyTests(unittest.TestCase):
         self.assertIn('ExecStart=/opt/sshpanel/sshpanel-recovery -config /opt/sshpanel/config.json', INSTALL)
         self.assertIn('UnsetEnvironment=PG_DSN', INSTALL)
         self.assertIn('! -L "$RECOVERY_OVERRIDE"', INSTALL)
-        self.assertIn("timeout 2 bash -c ':</dev/tcp/127.0.0.1/9090'", INSTALL)
-        self.assertIn('sshpanel no abrió 127.0.0.1:9090', INSTALL)
+        self.assertIn('is-active --quiet "$SERVICE_NAME"', INSTALL)
+        self.assertIn("ss -H -ltnp '( sport = :9090 )'", INSTALL)
+        self.assertIn('http://127.0.0.1:9090/api/auth/me', INSTALL)
+        self.assertIn('http://127.0.0.1:9090/api/auth/login', INSTALL)
+        self.assertIn('La API no quedó operativa en 127.0.0.1:9090', INSTALL)
 
     def test_online_bridge_unit_is_registered_and_removed_transactionally(self):
         self.assertIn('register_resource unit /etc/systemd/system/conecta-online-bridge.service', INSTALL)
@@ -157,7 +160,7 @@ class LifecycleSafetyTests(unittest.TestCase):
             self.assertFalse(install_dir.exists())
             self.assertFalse((systemd / "sshpanel.service").exists())
             self.assertFalse((bindir / "conecta").exists())
-            self.assertIn("STATE=uninstalled", (state_dir / "manifest").read_text())
+            self.assertFalse(state_dir.exists(), "La purga debe eliminar el estado transaccional residual")
 
     def test_corrupt_install_recovery_preserves_data_and_clears_owned_cli(self):
         with tempfile.TemporaryDirectory(prefix="conecta-corrupt-recovery-") as td:

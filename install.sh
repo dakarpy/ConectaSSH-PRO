@@ -1147,20 +1147,32 @@ register_resource symlink /etc/systemd/system/multi-user.target.wants/sshpanel.s
 "$SYSTEMCTL_BIN" enable  "$SERVICE_NAME"
 "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"
 
-# Do not report a successful install while the API listener needed by AUTO
-# CONFIGURAR is absent. Bound the wait so a broken DB/config fails clearly.
+# Require the service MainPID to own the socket and the API to respond.
 api_ready=false
-for attempt in $(seq 1 20); do
-  if timeout 2 bash -c ':</dev/tcp/127.0.0.1/9090' >/dev/null 2>&1; then
-    api_ready=true
-    break
+for attempt in $(seq 1 30); do
+  if "$SYSTEMCTL_BIN" is-active --quiet "$SERVICE_NAME"; then
+    api_pid="$("$SYSTEMCTL_BIN" show -p MainPID --value "$SERVICE_NAME" 2>/dev/null || true)"
+    if [[ "$api_pid" =~ ^[1-9][0-9]*$ ]] &&
+       ss -H -ltnp '( sport = :9090 )' 2>/dev/null | grep -Eq "pid=${api_pid},"; then
+      api_http_code="$(curl -sS --connect-timeout 1 --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:9090/api/auth/me 2>/dev/null || true)"
+      case "$api_http_code" in 200|401) api_ready=true; break ;; esac
+    fi
   fi
   sleep 1
 done
 if [[ "$api_ready" != "true" ]]; then
   "$SYSTEMCTL_BIN" status "$SERVICE_NAME" --no-pager -l || true
-  journalctl -u "$SERVICE_NAME" -n 60 --no-pager || true
-  error "sshpanel no abrió 127.0.0.1:9090. La instalación no se marcará como correcta; revisá el error de arranque anterior."
+  journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
+  ss -ltnp '( sport = :9090 )' 2>/dev/null || true
+  error "La API no quedó operativa en 127.0.0.1:9090. La instalación no se marcará como correcta."
+fi
+api_login_code="$(curl -sS --connect-timeout 2 --max-time 5 -o /dev/null -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  --data "{\"username\":\"admin\",\"password\":\"${ADMIN_PASSWORD}\"}" \
+  http://127.0.0.1:9090/api/auth/login 2>/dev/null || true)"
+if [[ "$api_login_code" != "200" ]]; then
+  journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
+  error "La API escucha en 9090, pero no se pudo validar el inicio de sesión administrativo (HTTP ${api_login_code:-sin respuesta})."
 fi
 
 echo ""

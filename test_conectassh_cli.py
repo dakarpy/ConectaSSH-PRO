@@ -94,7 +94,7 @@ class WebsocketPort80MenuTest(unittest.TestCase):
     def test_websocket_menu_renders_status_line_and_keeps_mobile_width(self):
         config = {"listen": "disabled", "extra_listen": ["0.0.0.0:8080"]}
         with patch.object(cli, "request", return_value=config):
-            rendered = cli.render_menu("WEBSOCKET SSH", cli.websocket_menu_options(),
+            rendered = cli.render_menu("PROXY SSH", cli.websocket_menu_options(),
                                        columns=40, status_line="ESTADO ACTUAL: (OFF)")
         self.assertIn("ESTADO ACTUAL: (OFF)", rendered)
         self.assertLessEqual(max(map(len, rendered.splitlines())), 40)
@@ -562,7 +562,7 @@ class AutoConfigurePreflightTest(unittest.TestCase):
         self.assertTrue(payload["xray"]["enabled"])
         self.assertEqual(payload["tls_forwarders"], cfg["tls_forwarders"])
         self.assertEqual(payload["users"], cfg["users"])
-        self.assertIn("WebSocket 80/TCP: CERRADO", output.getvalue())
+        self.assertIn("PROXY 80/TCP: CERRADO", output.getvalue())
         self.assertIn("TLS Tunnel/443 quedó fuera", output.getvalue())
 
     def test_main_menu_auto_configure_label_is_short(self):

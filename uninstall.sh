@@ -135,6 +135,14 @@ for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
   fi
 done
 systemctl daemon-reload >/dev/null 2>&1 || true
+RECOVERY_OVERRIDE="/etc/systemd/system/sshpanel.service.d/temporary-recovery.conf"
+if $PURGE && [[ -f "$RECOVERY_OVERRIDE" && ! -L "$RECOVERY_OVERRIDE" ]] &&
+   grep -Fq 'ExecStart=/opt/sshpanel/sshpanel-recovery -config /opt/sshpanel/config.json' "$RECOVERY_OVERRIDE" &&
+   grep -Fq 'UnsetEnvironment=PG_DSN' "$RECOVERY_OVERRIDE"; then
+  rm -f -- "$RECOVERY_OVERRIDE" || fail "No se pudo eliminar el override temporal de recuperación de Conecta."
+  rmdir --ignore-fail-on-non-empty "${RECOVERY_OVERRIDE%/*}" 2>/dev/null || true
+  systemctl daemon-reload >/dev/null 2>&1 || fail "No se pudo recargar systemd después de retirar el override de recuperación."
+fi
 for unit in "$SERVICE" "$BRIDGE_SERVICE" "$DNS_SERVICE"; do
   unit_path="/etc/systemd/system/$unit"
   if [[ -e "$unit_path" || -L "$unit_path" ]]; then
@@ -154,16 +162,17 @@ elif [[ -e /usr/local/bin/conectassh || -L /usr/local/bin/conectassh ]]; then
   info "Se conserva /usr/local/bin/conectassh: no coincide con el enlace propio."
 fi
 
-# A database is purged only when manifest flags AND PostgreSQL comments prove
-# that both objects were created by this exact installation transaction.
+# Purge PostgreSQL only when this installation's manifest flags and
+# transaction-specific object comments prove exclusive ownership.
 if $PURGE && [[ "$DB_CREATED_BY_CONECTA" == "1" && "$DB_ROLE_CREATED_BY_CONECTA" == "1" && -n "${INSTALL_ID:-}" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
   db_comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
   role_comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_authid') FROM pg_authid WHERE rolname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
   if [[ "$db_comment" == "conecta-ssh-pro:$INSTALL_ID" && "$role_comment" == "conecta-ssh-pro:$INSTALL_ID" ]]; then
-    su - postgres -c "dropdb --if-exists '$DB_NAME'" >/dev/null 2>&1 || fail "No se pudo eliminar la base de datos propia; se conservan los datos restantes."
+    su - postgres -c "psql -v ON_ERROR_STOP=1 -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='sshpanel' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || fail "No se pudieron cerrar las conexiones a la base sshpanel."
+    su - postgres -c "dropdb --if-exists '$DB_NAME'" >/dev/null 2>&1 || fail "No se pudo eliminar la base de datos propia."
     su - postgres -c "dropuser --if-exists '$DB_USER'" >/dev/null 2>&1 || fail "No se pudo eliminar el rol propio de PostgreSQL."
   else
-    info "PostgreSQL se conserva: los comentarios de propiedad no coinciden con esta instalación."
+    info "PostgreSQL se conserva: no se pudo demostrar la propiedad exclusiva de la base y el rol."
   fi
 elif $PURGE; then
   info "PostgreSQL se conserva: el manifiesto no demuestra propiedad exclusiva de la base y del rol."
@@ -198,5 +207,18 @@ if [[ -f "$TXN_MANIFEST" && "$(stat -c '%u' "$TXN_MANIFEST" 2>/dev/null || true)
   chmod 0600 "$tmp"
   mv -f -- "$tmp" "$TXN_MANIFEST"
   [[ -f "$STATE_DIR/resources.tsv" && ! -L "$STATE_DIR/resources.tsv" ]] && rm -f -- "$STATE_DIR/resources.tsv"
+fi
+if $PURGE; then
+  if [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]]; then
+    state_product=""
+    if [[ -f "$TXN_MANIFEST" && ! -L "$TXN_MANIFEST" ]]; then state_product="$(awk -F= '$1=="PRODUCT" {print substr($0,index($0,"=")+1); exit}' "$TXN_MANIFEST")"; fi
+    [[ -z "$state_product" || "$state_product" == "ConectaSSH-PRO" ]] || fail "El estado parece ajeno; no se elimina: $STATE_DIR"
+    rm -rf -- "$STATE_DIR" || fail "No se pudo eliminar el estado residual: $STATE_DIR"
+  fi
+  for stale_logs in /var/tmp/conecta-ssh-pro-logs.*; do
+    [[ -e "$stale_logs" || -L "$stale_logs" ]] || continue
+    [[ -d "$stale_logs" && ! -L "$stale_logs" && "$(stat -c '%u' "$stale_logs" 2>/dev/null || true)" == "0" ]] || continue
+    rm -rf -- "$stale_logs"
+  done
 fi
 info "ConectaSSH-PRO desinstalado. No se modificaron OpenSSH, sshd_config, puerto 22 ni usuarios SSH."
