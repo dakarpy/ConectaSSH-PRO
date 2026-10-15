@@ -712,3 +712,24 @@ class SSHPlusOnlineReportTest(unittest.TestCase):
     def test_online_duration_parses_go_duration(self):
         self.assertEqual(cli._online_duration("1h38m43s"), "1:38:43")
         self.assertEqual(cli._online_duration("14m14s"), "0:14:14")
+
+class SSHPlusLargeRestoreGateTest(unittest.TestCase):
+    def test_restore_accepts_more_than_95_valid_users(self):
+        summary = {"ok": True, "ready": True, "users_found": 13574}
+        inspect_result = SimpleNamespace(returncode=0, stdout=json.dumps(summary) + "\\n", stderr="")
+        restore_result = SimpleNamespace(returncode=0, stdout="RESTORE_OK\\nUSUARIOS_RESTAURADOS 13574", stderr="")
+        with patch.object(cli.subprocess, "run", side_effect=[inspect_result, restore_result]) as run, \\
+                redirect_stdout(io.StringIO()) as output:
+            cli.restore_sshplus_backup("/root/backup.vps")
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("13574", output.getvalue())
+        self.assertIn("RESTORE_OK", output.getvalue())
+
+    def test_restore_rejects_backup_with_zero_valid_users_without_importing(self):
+        summary = {"ok": True, "ready": False, "users_found": 0}
+        inspect_result = SimpleNamespace(returncode=0, stdout=json.dumps(summary) + "\\n", stderr="")
+        with patch.object(cli.subprocess, "run", return_value=inspect_result) as run:
+            with self.assertRaisesRegex(cli.CLIError, "no hay usuarios válidos"):
+                cli.restore_sshplus_backup("/root/empty.vps")
+        run.assert_called_once()
+
