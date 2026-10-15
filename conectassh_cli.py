@@ -409,6 +409,28 @@ def collect_vps_status():
         used_mem = stats.get("mem_used_bytes", 0)
     now = dt.datetime.now(dt.timezone.utc)
     expired = sum(1 for u in users or [] if (e := parse_expiry(u.get("expires_at"))) and e <= now)
+
+    # The home dashboard must count SSHPlus/Linux accounts too, not only API
+    # users. Use the same strong marker as list_users(): a per-user credential
+    # file. Deduplicate case-insensitively against API users and never count root.
+    api_names = {
+        str(u.get("username", "")).strip().lower()
+        for u in (users or []) if isinstance(u, dict) and str(u.get("username", "")).strip()
+    }
+    sshplus_dir = Path("/etc/SSHPlus/senha")
+    local_sshplus_names = set()
+    try:
+        for entry in pwd.getpwall():
+            name = entry.pw_name.strip()
+            if not name or name.lower() == "root" or name.lower() in api_names:
+                continue
+            credential = sshplus_dir / name
+            if credential.is_file() and not credential.is_symlink():
+                local_sshplus_names.add(name.lower())
+    except OSError:
+        pass
+    total_visible_users = len(api_names | local_sshplus_names)
+
     interfaces = (stats or {}).get("interfaces") or []
     rx_bytes = sum(float(item.get("rx_bytes", 0) or 0) for item in interfaces)
     tx_bytes = sum(float(item.get("tx_bytes", 0) or 0) for item in interfaces)
@@ -423,7 +445,7 @@ def collect_vps_status():
         "cores": os.cpu_count() or 1, "cpu": (stats or {}).get("cpu_percent"), "load": load_avg,
         "mem_total": total_mem, "mem_used": used_mem,
         "disk_pct": disk_pct,
-        "ssh_total": len(users) if users is not None else None,
+        "ssh_total": total_visible_users if users is not None else None,
         "ssh_online": sum(1 for u in users or [] if u.get("active_conns", 0) > 0) if users is not None else None,
         "ssh_expired": expired if users is not None else None,
         "xray_online": xray.get("online_users") if xray else None,
