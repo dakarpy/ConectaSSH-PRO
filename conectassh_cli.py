@@ -486,7 +486,7 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """List API-managed users plus interactive Linux accounts absent from the API."""
+    """List API-managed users and SSH Linux accounts found through SSHPlus files."""
     api_users = request("GET", "/api/users") or []
     by_name = {}
     for row in api_users:
@@ -497,43 +497,92 @@ def list_users():
                 row["_listing_source"] = "API"
                 by_name[username.lower()] = row
 
-    # External panels may create a Linux/PAM account without registering it in
-    # ConectaSSH-PRO's database. Include local interactive accounts, but don't
-    # expose root or standard service/system accounts as SSH customers.
+    # SSHPlus accounts can intentionally use UID < UID_MIN or /bin/false.
+    # A per-user SSHPlus credential file is a stronger signal than shell/UID.
+    sshplus_password_dir = Path("/etc/SSHPlus/senha")
+    sshplus_limits = {}
+    users_db = Path("/root/usuarios.db")
     try:
-        uid_min = 1000
-        try:
-            with open("/etc/login.defs", encoding="utf-8") as handle:
-                for line in handle:
-                    match = re.match(r"^\s*UID_MIN\s+(\d+)", line)
-                    if match:
-                        uid_min = int(match.group(1))
-                        break
-        except OSError:
-            pass
+        if users_db.is_file() and not users_db.is_symlink():
+            for line in users_db.read_text(encoding="utf-8", errors="replace").splitlines():
+                fields = line.split()
+                if len(fields) >= 2 and fields[0].lower() != "root":
+                    try:
+                        sshplus_limits[fields[0].lower()] = int(fields[1])
+                    except ValueError:
+                        continue
+    except OSError:
+        pass
 
-        non_interactive_shells = {
-            "", "/usr/sbin/nologin", "/sbin/nologin", "/bin/false",
-            "/usr/bin/false", "/bin/sync", "/sbin/halt", "/sbin/shutdown",
+    try:
+        import spwd
+    except ImportError:
+        spwd = None
+
+    uid_min = 1000
+    try:
+        with open("/etc/login.defs", encoding="utf-8") as handle:
+            for line in handle:
+                match = re.match(r"^\\s*UID_MIN\\s+(\\d+)", line)
+                if match:
+                    uid_min = int(match.group(1))
+                    break
+    except OSError:
+        pass
+
+    non_interactive_shells = {
+        "", "/usr/sbin/nologin", "/sbin/nologin", "/bin/false",
+        "/usr/bin/false", "/bin/sync", "/sbin/halt", "/sbin/shutdown",
+    }
+    for entry in pwd.getpwall():
+        username = entry.pw_name.strip()
+        key = username.lower()
+        if not username or key == "root" or key in by_name:
+            continue
+        credential_file = sshplus_password_dir / username
+        has_sshplus_credentials = (
+            credential_file.is_file() and not credential_file.is_symlink()
+        )
+        # Include accounts regardless of UID/shell when SSHPlus has its own
+        # credential file. For other accounts, retain conservative filters.
+        if not has_sshplus_credentials and (
+            entry.pw_uid < uid_min or entry.pw_shell in non_interactive_shells
+        ):
+            continue
+
+        password = "N/D"
+        if has_sshplus_credentials:
+            try:
+                raw_password = credential_file.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                if raw_password and raw_password[0]:
+                    password = raw_password[0].strip()
+            except OSError:
+                pass
+
+        expiry = ""
+        if spwd is not None:
+            try:
+                shadow_entry = spwd.getspnam(username)
+                expiry_day = getattr(shadow_entry, "sp_expire", -1)
+                if isinstance(expiry_day, int) and expiry_day >= 0:
+                    expiry = (
+                        dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+                        + dt.timedelta(days=expiry_day)
+                    ).isoformat().replace("+00:00", "Z")
+            except (KeyError, OSError):
+                pass
+
+        by_name[key] = {
+            "username": username,
+            "password": password,
+            "use_pam": False,
+            "max_connections": sshplus_limits.get(key, 0),
+            "expires_at": expiry,
+            "total_bytes": 0,
+            "_listing_source": "LINUX/SSHPLUS" if has_sshplus_credentials else "LINUX/PAM",
         }
-        for entry in pwd.getpwall():
-            username = entry.pw_name.strip()
-            key = username.lower()
-            if not username or key == "root" or key in by_name:
-                continue
-            if entry.pw_uid < uid_min or entry.pw_shell in non_interactive_shells:
-                continue
-            by_name[key] = {
-                "username": username,
-                "password": None,
-                "use_pam": True,
-                "max_connections": 0,
-                "expires_at": "",
-                "total_bytes": 0,
-                "_listing_source": "LINUX/PAM",
-            }
-    except (OSError, ImportError) as exc:
-        print(f"Aviso: no se pudieron consultar todas las cuentas Linux: {exc}")
 
     users = sorted(by_name.values(), key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
@@ -549,15 +598,21 @@ def list_users():
     print("┗" + "━" * inner + "┛")
     api_count = 0
     linux_count = 0
+    sshplus_count = 0
     for u in users:
         username = str(u.get("username", ""))
         source = u.get("_listing_source", "API")
         if source == "LINUX/PAM":
             linux_count += 1
-            # Keep the username exact so customers never copy a marker into login apps.
-            password = "EXTERNO"
+            password = "N/D"
             limit = "N/D"
             expiry = "SIN DATOS"
+            consumption = "N/D"
+        elif source == "LINUX/SSHPLUS":
+            sshplus_count += 1
+            password = str(u.get("password") or "N/D")
+            limit = str(u.get("max_connections", 0) or "N/D")
+            expiry = _expiry_remaining_label(u.get("expires_at"))
             consumption = "N/D"
         else:
             api_count += 1
@@ -571,11 +626,12 @@ def list_users():
         print(row)
         print("━" * width)
     print(f"Total de usuarios visibles: {len(users)}")
-    print(f"Administrados por el script/API: {api_count} | Linux/PAM externos: {linux_count}")
+    print(f"API: {api_count} | Linux/SSHPlus: {sshplus_count} | Linux/PAM sin datos SSHPlus: {linux_count}")
+    if sshplus_count:
+        print("Linux/SSHPlus: clave y límite leídos de archivos locales; consumo no disponible en esta fuente.")
     if linux_count:
-        print("EXTERNO = cuenta Linux/PAM detectada fuera de la API; el usuario se muestra sin modificar.")
-        print("Plan, vencimiento, límite y consumo de cuentas externas no disponibles en la API.")
-    print("PAM = autenticación Linux; N/D = sin datos.")
+        print("Linux/PAM: cuenta detectada sin archivo SSHPlus; algunos datos no están disponibles.")
+    print("N/D = dato no disponible en las fuentes consultadas.")
     return users
 
 def user_payload(u):
