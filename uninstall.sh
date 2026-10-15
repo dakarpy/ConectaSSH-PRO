@@ -161,18 +161,20 @@ elif [[ -e /usr/local/bin/conectassh || -L /usr/local/bin/conectassh ]]; then
   info "Se conserva /usr/local/bin/conectassh: no coincide con el enlace propio."
 fi
 
-if $PURGE; then
-  [[ "$DB_NAME" == "sshpanel" && "$DB_USER" == "sshpanel" ]] || fail "El manifiesto no identifica la base/rol estándar; no se borrará PostgreSQL."
-  if id postgres >/dev/null 2>&1; then
-    command -v psql >/dev/null 2>&1 || fail "PostgreSQL existe, pero psql no está disponible; no se puede completar la purga."
-    db_exists="$(su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='sshpanel'\"" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$db_exists" == "1" ]]; then
-      su - postgres -c "psql -v ON_ERROR_STOP=1 -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='sshpanel' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || fail "No se pudieron cerrar las conexiones a la base sshpanel."
-      su - postgres -c "dropdb --if-exists sshpanel" >/dev/null 2>&1 || fail "No se pudo eliminar la base sshpanel."
-    fi
-    role_exists="$(su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='sshpanel'\"" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$role_exists" == "1" ]]; then su - postgres -c "dropuser --if-exists sshpanel" >/dev/null 2>&1 || fail "No se pudo eliminar el rol sshpanel; revisá dependencias PostgreSQL restantes."; fi
-  else info "No existe un PostgreSQL local; no hay base/rol local que purgar."; fi
+# Purge PostgreSQL only when this installation's manifest flags and
+# transaction-specific object comments prove exclusive ownership.
+if $PURGE && [[ "$DB_CREATED_BY_CONECTA" == "1" && "$DB_ROLE_CREATED_BY_CONECTA" == "1" && -n "${INSTALL_ID:-}" ]] && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+  db_comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
+  role_comment="$(su - postgres -c "psql -tAc \"SELECT shobj_description(oid, 'pg_authid') FROM pg_authid WHERE rolname='sshpanel'\"" 2>/dev/null | tr -d '\r' || true)"
+  if [[ "$db_comment" == "conecta-ssh-pro:$INSTALL_ID" && "$role_comment" == "conecta-ssh-pro:$INSTALL_ID" ]]; then
+    su - postgres -c "psql -v ON_ERROR_STOP=1 -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='sshpanel' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || fail "No se pudieron cerrar las conexiones a la base sshpanel."
+    su - postgres -c "dropdb --if-exists '$DB_NAME'" >/dev/null 2>&1 || fail "No se pudo eliminar la base de datos propia."
+    su - postgres -c "dropuser --if-exists '$DB_USER'" >/dev/null 2>&1 || fail "No se pudo eliminar el rol propio de PostgreSQL."
+  else
+    info "PostgreSQL se conserva: no se pudo demostrar la propiedad exclusiva de la base y el rol."
+  fi
+elif $PURGE; then
+  info "PostgreSQL se conserva: el manifiesto no demuestra propiedad exclusiva de la base y del rol."
 fi
 
 FINAL_STATE=uninstalled
