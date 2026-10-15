@@ -12,6 +12,7 @@ import getpass
 import gzip
 import json
 import os
+import pwd
 from pathlib import Path
 import secrets
 import shutil
@@ -485,11 +486,57 @@ def _expiry_remaining_label(value):
 
 
 def list_users():
-    """Lista usuarios en columnas de ancho uniforme, adaptadas a terminales móviles."""
-    users = sorted(request("GET", "/api/users") or [],
-                   key=lambda row: str(row.get("username", "")).lower())
+    """List API-managed users plus interactive Linux accounts absent from the API."""
+    api_users = request("GET", "/api/users") or []
+    by_name = {}
+    for row in api_users:
+        if isinstance(row, dict):
+            username = str(row.get("username", "")).strip()
+            if username:
+                row = dict(row)
+                row["_listing_source"] = "API"
+                by_name[username.lower()] = row
+
+    # External panels may create a Linux/PAM account without registering it in
+    # ConectaSSH-PRO's database. Include local interactive accounts, but don't
+    # expose root or standard service/system accounts as SSH customers.
+    try:
+        uid_min = 1000
+        try:
+            with open("/etc/login.defs", encoding="utf-8") as handle:
+                for line in handle:
+                    match = re.match(r"^\s*UID_MIN\s+(\d+)", line)
+                    if match:
+                        uid_min = int(match.group(1))
+                        break
+        except OSError:
+            pass
+
+        non_interactive_shells = {
+            "", "/usr/sbin/nologin", "/sbin/nologin", "/bin/false",
+            "/usr/bin/false", "/bin/sync", "/sbin/halt", "/sbin/shutdown",
+        }
+        for entry in pwd.getpwall():
+            username = entry.pw_name.strip()
+            key = username.lower()
+            if not username or key == "root" or key in by_name:
+                continue
+            if entry.pw_uid < uid_min or entry.pw_shell in non_interactive_shells:
+                continue
+            by_name[key] = {
+                "username": username,
+                "password": None,
+                "use_pam": True,
+                "max_connections": 0,
+                "expires_at": "",
+                "total_bytes": 0,
+                "_listing_source": "LINUX/PAM",
+            }
+    except (OSError, ImportError) as exc:
+        print(f"Aviso: no se pudieron consultar todas las cuentas Linux: {exc}")
+
+    users = sorted(by_name.values(), key=lambda row: str(row.get("username", "")).lower())
     cols = terminal_columns()
-    # Five equally sized columns keep each heading centered over its values.
     width = max(20, min(58, cols - 2))
     inner = width - 2
     col_width = inner // 5
@@ -500,22 +547,35 @@ def list_users():
     print("┏" + "━" * inner + "┓")
     print("┃" + header + "┃")
     print("┗" + "━" * inner + "┛")
+    api_count = 0
+    linux_count = 0
     for u in users:
         username = str(u.get("username", ""))
-        # PAM uses the Linux system password; its one-way hash cannot be reversed.
-        password = str(u.get("password") or ("PAM" if u.get("use_pam") else "N/D"))
-        limit = str(u.get("max_connections", 0))
-        duration = _expiry_remaining_label(u.get("expires_at"))
-        consumption = size(u.get("total_bytes", 0)).replace(" ", "")
-        values = (username, password, limit, duration, consumption)
+        source = u.get("_listing_source", "API")
+        if source == "LINUX/PAM":
+            linux_count += 1
+            username += "*"
+            password = "PAM"
+            limit = "N/D"
+            expiry = "SIN DATOS"
+            consumption = "N/D"
+        else:
+            api_count += 1
+            password = str(u.get("password") or ("PAM" if u.get("use_pam") else "N/D"))
+            limit = str(u.get("max_connections", 0))
+            expiry = _expiry_remaining_label(u.get("expires_at"))
+            consumption = size(u.get("total_bytes", 0)).replace(" ", "")
+        values = (username, password, limit, expiry, consumption)
         row = str(values[0])[:widths[0]].ljust(widths[0]) + "".join(
             str(value)[:w].center(w) for value, w in zip(values[1:], widths[1:]))
         print(row)
         print("━" * width)
-    print(f"Total de usuarios: {len(users)}")
-    print("PAM = clave Linux no recuperable; N/D = sin clave."[:width])
+    print(f"Total de usuarios visibles: {len(users)}")
+    print(f"Administrados por el script/API: {api_count} | Linux/PAM externos: {linux_count}")
+    if linux_count:
+        print("* = cuenta Linux/PAM externa. Plan, vencimiento, límite y consumo no disponibles en la API.")
+    print("PAM = clave Linux no recuperable; N/D = sin datos.")
     return users
-
 
 def user_payload(u):
     fields = ("username", "max_connections", "limit_mbps_up", "limit_mbps_down",
