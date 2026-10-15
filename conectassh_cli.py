@@ -185,7 +185,18 @@ def request(method, path, data=None, timeout=25):
         # Do not send the bearer credential through an inherited HTTP proxy.
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(req, timeout=timeout) as response:
-            raw = response.read(2 * 1024 * 1024)
+            # /api/users may exceed 2 MiB after restoring thousands of users.
+            # Reading a fixed 2 MiB silently truncated valid JSON and caused
+            # "Unterminated string" errors in the user listing and menu stats.
+            # Read up to a generous bounded limit, and fail explicitly rather
+            # than attempting to parse a truncated response.
+            max_response_bytes = 64 * 1024 * 1024
+            raw = response.read(max_response_bytes + 1)
+            if len(raw) > max_response_bytes:
+                raise CLIError(
+                    f"API response from {path} exceeds {max_response_bytes // (1024 * 1024)} MiB; "
+                    "use paginated listing or reduce the response size."
+                )
             return json.loads(raw) if raw.strip() else None
     except urllib.error.HTTPError as exc:
         detail = exc.read(2048).decode("utf-8", "replace").strip()
