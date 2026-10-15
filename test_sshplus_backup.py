@@ -63,14 +63,22 @@ class SSHPlusBackupSafetyTest(unittest.TestCase):
             self.assertEqual(len(users), 94)
             self.assertNotIn("root", {user["username"] for user in users})
 
-    def test_restore_refuses_non_95_without_calling_api(self):
+    def test_restore_accepts_large_user_counts_and_sends_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "backup.vps"
-            make_backup(path, count=94)
-            with patch.object(sshplus, "req") as api:
-                with self.assertRaisesRegex(ValueError, "exactamente 95"):
+            make_backup(path, count=450)
+            calls = []
+            def fake_req(method, route, data, timeout=120):
+                calls.append(data["users"])
+                return {"restored": len(data["users"]), "total": len(data["users"])}
+            with patch.object(sshplus, "req", side_effect=fake_req):
+                output = io.StringIO()
+                with redirect_stdout(output):
                     sshplus.restore(path)
-            api.assert_not_called()
+            self.assertEqual(sum(len(batch) for batch in calls), 450)
+            self.assertGreater(len(calls), 1)
+            self.assertTrue(all(len(batch) <= sshplus.RESTORE_BATCH_SIZE for batch in calls))
+            self.assertIn("USUARIOS_RESTAURADOS 450", output.getvalue())
 
     def test_symlink_member_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
