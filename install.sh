@@ -1099,6 +1099,21 @@ info "[9/10] Public protocols remain disabled until explicitly configured."
 
 # ── 10. Systemd service ──────────────────────────────────────────────────────
 info "[10/10] Creating systemd service '${SERVICE_NAME}'…"
+
+# A prior emergency recovery can leave a systemd drop-in that silently replaces
+# ExecStart with sshpanel-recovery and unsets PG_DSN. A normal reinstall writes
+# the base unit but systemd still applies that override, so the real panel/API
+# never starts. Remove only this exact, known Conecta recovery override; keep
+# every other administrator/systemd drop-in untouched.
+RECOVERY_OVERRIDE="/etc/systemd/system/${SERVICE_NAME}.service.d/temporary-recovery.conf"
+if [[ -f "$RECOVERY_OVERRIDE" && ! -L "$RECOVERY_OVERRIDE" ]] &&
+   grep -Fq 'ExecStart=/opt/sshpanel/sshpanel-recovery -config /opt/sshpanel/config.json' "$RECOVERY_OVERRIDE" &&
+   grep -Fq 'UnsetEnvironment=PG_DSN' "$RECOVERY_OVERRIDE"; then
+  rm -f -- "$RECOVERY_OVERRIDE" || error "No se pudo retirar el override temporal de recuperación de Conecta."
+  rmdir --ignore-fail-on-non-empty "${RECOVERY_OVERRIDE%/*}" 2>/dev/null || true
+  info "  Retirado el override temporal de recuperación de Conecta; se conservaron los demás drop-ins."
+fi
+
 register_resource unit "/etc/systemd/system/${SERVICE_NAME}.service"
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
@@ -1132,7 +1147,22 @@ register_resource symlink /etc/systemd/system/multi-user.target.wants/sshpanel.s
 "$SYSTEMCTL_BIN" enable  "$SERVICE_NAME"
 "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"
 
-sleep 2
+# Do not report a successful install while the API listener needed by AUTO
+# CONFIGURAR is absent. Bound the wait so a broken DB/config fails clearly.
+api_ready=false
+for attempt in $(seq 1 20); do
+  if timeout 2 bash -c ':</dev/tcp/127.0.0.1/9090' >/dev/null 2>&1; then
+    api_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$api_ready" != "true" ]]; then
+  "$SYSTEMCTL_BIN" status "$SERVICE_NAME" --no-pager -l || true
+  journalctl -u "$SERVICE_NAME" -n 60 --no-pager || true
+  error "sshpanel no abrió 127.0.0.1:9090. La instalación no se marcará como correcta; revisá el error de arranque anterior."
+fi
+
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo -e "${GREEN}   Installation complete!                  ${NC}"
